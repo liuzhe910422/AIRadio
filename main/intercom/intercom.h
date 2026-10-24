@@ -17,6 +17,14 @@
 
 class Application;
 
+struct IntercomRoomOption {
+  std::string id;
+  std::string name;
+  std::string code;
+  bool current = false;
+  bool is_default = false;
+};
+
 class Intercom {
 public:
   explicit Intercom(Application &app);
@@ -29,6 +37,8 @@ public:
   bool Busy() const;
   bool IsRecording() const;
   const char *Status() const;
+  const char *DeviceId() const { return id_.c_str(); }
+  std::string SpeakingDeviceId();
   const char *RoomName() const { return room_name_.c_str(); }
   bool CanRecord() const;
   bool IsHosted() const { return hosted_; }
@@ -39,6 +49,17 @@ public:
   bool LeaveRoom();
   bool AcceptInvite(const std::string &code);
   std::string ListRooms();
+  // Room picker state is owned by the Application task.
+  const std::vector<IntercomRoomOption> &RoomOptions() const {
+    return room_options_;
+  }
+  bool RoomPickerVisible() const { return room_picker_visible_; }
+  bool RoomPickerPending() const { return !room_picker_pending_.empty(); }
+  int RoomPickerSeconds() const;
+  const std::string &RoomPickerError() const { return room_picker_error_; }
+  uint32_t RoomPickerRevision() const { return room_picker_revision_; }
+  void SelectRoom(const std::string &id);
+  void CloseRoomPicker();
   // Called by MCP on the Application task; caller owns the returned JSON.
   struct cJSON *GetSessionTranscript() const;
   // UI access and controls run on Application's task only.
@@ -51,6 +72,14 @@ public:
   void StopChatReplay();
 
 private:
+  void ShowRoomPicker(const std::string &response, uint32_t generation);
+  std::vector<IntercomRoomOption> room_options_;
+  std::atomic<uint32_t> room_picker_generation_{0};
+  uint32_t room_picker_revision_ = 0;
+  bool room_picker_visible_ = false;
+  int64_t room_picker_deadline_ = 0;
+  std::string room_picker_pending_;
+  std::string room_picker_error_;
   enum class State {
     Disabled,
     Disconnected,
@@ -88,6 +117,7 @@ private:
   std::string room_name_ = "默认房间";
   std::string message_id_;
   std::string incoming_id_;
+  std::string incoming_source_id_;
   std::shared_ptr<WebSocket> ws_;
   uint16_t frame_lengths_[500] = {};
   int frame_count_ = 0;
