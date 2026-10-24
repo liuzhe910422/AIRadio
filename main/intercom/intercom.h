@@ -37,6 +37,8 @@ public:
   bool LeaveRoom();
   bool AcceptInvite(const std::string &code);
   std::string ListRooms();
+  // Called by MCP on the Application task; caller owns the returned JSON.
+  struct cJSON *GetSessionTranscript() const;
   // UI access and controls run on Application's task only.
   const std::vector<IntercomChatMessage> &ChatMessages() const {
     return chat_messages_;
@@ -63,6 +65,7 @@ private:
   std::string chat_session_;
   std::string replay_message_;
   uint32_t chat_revision_ = 0;
+  bool chat_records_evicted_ = false;
   std::atomic<uint32_t> replay_generation_{0};
   std::atomic<bool> replay_task_active_{false};
   std::mutex replay_mutex_;
