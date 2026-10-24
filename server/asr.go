@@ -95,36 +95,44 @@ type chatRecipient struct {
 	token string
 }
 type chatMessage struct {
-	ID         string    `json:"message_id"`
-	Room       string    `json:"room_id"`
-	Source     string    `json:"source_id"`
-	Created    string    `json:"created_at"`
-	Duration   int       `json:"duration_ms"`
-	Text       string    `json:"text"`
-	Truncated  bool      `json:"text_truncated"`
-	Status     string    `json:"asr_status"`
-	Available  bool      `json:"audio_available"`
-	Expires    time.Time `json:"-"`
-	packets    [][]byte
-	recipients []chatRecipient
-	size       int
+	EventKind     string `json:"event_kind,omitempty"`
+	EventRoom     string `json:"event_room_id,omitempty"`
+	EventRoomName string `json:"event_room_name,omitempty"`
+	Announce      bool   `json:"announce,omitempty"`
+	spokenText    string
+	ID            string    `json:"message_id"`
+	Room          string    `json:"room_id"`
+	Source        string    `json:"source_id"`
+	Created       string    `json:"created_at"`
+	Duration      int       `json:"duration_ms"`
+	Text          string    `json:"text"`
+	Truncated     bool      `json:"text_truncated"`
+	Status        string    `json:"asr_status"`
+	Available     bool      `json:"audio_available"`
+	Expires       time.Time `json:"-"`
+	packets       [][]byte
+	recipients    []chatRecipient
+	size          int
 }
 type chatJob struct {
 	message *chatMessage
 	config  asrConfig
 }
 type chatService struct {
-	mu       sync.Mutex
-	config   asrConfig
-	messages []*chatMessage
-	bytes    int
-	jobs     chan chatJob
-	slots    chan struct{}
-	client   *http.Client
+	ttsConfig ttsConfig
+	ttsJobs   chan ttsJob
+	ttsClient *http.Client
+	mu        sync.Mutex
+	config    asrConfig
+	messages  []*chatMessage
+	bytes     int
+	jobs      chan chatJob
+	slots     chan struct{}
+	client    *http.Client
 }
 
 func newChatService() *chatService {
-	return &chatService{config: asrConfig{Model: defaultASRModel}, jobs: make(chan chatJob, 16), slots: make(chan struct{}, 2), client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &chatService{ttsConfig: defaultTTSConfig(), ttsJobs: make(chan ttsJob, 16), ttsClient: &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, config: asrConfig{Model: defaultASRModel}, jobs: make(chan chatJob, 16), slots: make(chan struct{}, 2), client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // One dispatcher per running HTTP service, stopped along with its context.
@@ -161,7 +169,7 @@ func (c *chatService) pruneLocked(now time.Time) {
 		}
 	}
 	c.messages = kept
-	for c.bytes > chatMaxBytes && len(c.messages) > 0 {
+	for (c.bytes > chatMaxBytes || len(c.messages) > 512) && len(c.messages) > 0 {
 		c.bytes -= c.messages[0].size
 		c.messages = c.messages[1:]
 	}

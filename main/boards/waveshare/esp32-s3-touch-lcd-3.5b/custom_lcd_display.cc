@@ -158,13 +158,13 @@ void CustomLcdDisplay::UpdateChatRecords() {
     const bool playing = intercom.ReplayMessage() == message.id;
     lv_obj_set_style_bg_color(
         button,
-        lv_color_hex(playing ? 0xFFD690 : (message.own ? 0xCDEAD9 : 0xDFEAF5)),
+        lv_color_hex(playing ? 0xFFD690 : (message.system ? 0xEEE2C9 : (message.own ? 0xCDEAD9 : 0xDFEAF5))),
         0);
     lv_obj_set_style_text_color(button, lv_color_hex(0x17332D), 0);
     auto label = lv_label_create(button);
     lv_obj_set_width(label, LV_PCT(100));
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-    std::string text = (message.own ? "我" : message.source) + " · " +
+    std::string text = (message.system ? "房间通知" : (message.own ? "我" : message.source)) + " · " +
                        std::to_string((message.duration_ms + 999) / 1000) +
                        "秒" + (playing ? " · 点击停止" : " · 点击播放") + "\n";
     text += !message.text.empty()

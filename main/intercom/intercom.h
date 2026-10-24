@@ -57,6 +57,8 @@ private:
     Playing,
     Replaying
   };
+  std::deque<std::string> announcements_;
+  std::deque<std::string> announced_ids_;
   std::vector<IntercomChatMessage> chat_messages_;
   std::string chat_session_;
   std::string replay_message_;

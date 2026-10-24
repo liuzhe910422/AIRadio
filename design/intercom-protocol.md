@@ -414,3 +414,32 @@ hello 可增加 `chat_enabled:true`；默认为 false，旧固件不收到聊天
 回放公网地址可配置为 `-public-base-url http://111.62.241.117:9200`，与本地监听地址独立。audio_path 不携带凭据，下载无需 Authorization 头。
 
 原始 Opus 位于内存 `server.chat.messages -> chatMessage.packets`，不写 .opus 文件；HTTP 请求时才封装 AIR1。`recordings/*.wav` 为独立调试录音；`playback_token` 字段暂保留但回放不使用。
+
+## 10. 房间语音通报与 TTS 配置
+
+管理员接口：
+
+- GET /api/tts/config：返回 enabled、url、model、voice、key_configured，不回显api_key。
+- PUT /api/tts/config：字段 enabled（boolean）、url、model、voice、api_key（string）、clear_key（boolean）。Key留空保留；clear_key明确清除。-db模式保存到service_config的tts项。
+- POST /api/tts/test：JSON `{"text":"设备零零三邀请你加入调度组。"}`，1～160字符；返回ok、duration_ms、opus_packets，验证TTS合成与AIR1所需Opus转码。失败返回502；该接口不自动向设备播放测试音。
+
+默认模型qwen-audio-3.1-tts-flash，音色longanhuan_v3.1。URL为`https://<workspace>.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer`，使用独立TTS密钥配置。输出24kHz单声道PCM16 WAV，服务端按实际data字节数解析（兼容厂商占位长度），重采样到16kHz后编码60ms Opus包，复用AIR1回放接口。
+
+成员实际加入成功时，目标房间当前在线且chat_enabled的设备收到系统记录；加入者文字为“你已加入…”，其它成员为“设备…加入了…”。重复加入同房间不生成加入通报；hello成功后另发member_online上线通报，包含恢复原房间的重连。创建房间也向创建者生成加入记录；被邀请设备不自动加入。
+
+邀请事件只发送给指定在线受邀设备，原room_invite控制帧保持，另生成系统聊天记录“设备…邀请你加入…”。该记录room_id为接收者当前视图房间，event_room_id/name才是被邀请的目标房间。
+
+系统记录沿用chat_message和chat_message_update，新增字段：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| event_kind | string | member_joined / member_online / room_invite；普通对讲省略 |
+| event_room_id | string | 事件目标房间ID |
+| event_room_name | string | 事件目标房间名称 |
+| announce | boolean | TTS准备完成时为true，设备可排队自动播报 |
+
+文字立即生成，TTS异步单工作任务处理，队列16项、单任务45秒超时。失败或未启用TTS仍保留文字，audio_available=false，不自动播报。成功更新同一message_id，audio_available=true并提供AIR1 audio_path。密钥不下发设备；本功能不依赖ASR启用。
+
+固件系统记录用独立底色显示；收到announce后按ID去重，待播队列最多4条（满时丢最早待播项），音频空闲才播放。实时对讲和助手回复优先；已开始通报沿用可被实时对讲打断的回放链路。断线、切房清空队列，旧session识别/合成更新不显示。当前逐条通报，尚未合并多人加入播报；离线邀请不补发。
+
+上线通报在hello_ack之后发送给当前房间在线且chat_enabled的设备（包含上线者）。其它成员收到“设备003已上线，当前在某房间”，上线者收到“你已上线，当前在某房间”。默认房间同样播报，每次重连也播报。返回默认房间会生成member_joined事件。

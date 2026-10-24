@@ -133,6 +133,7 @@ func (a *apiServer) chatAudio(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "audio expired", 410)
 		return
 	}
+	packets := m.packets
 	c.mu.Unlock()
 	// AIR1: 4-byte magic, uint32 LE rate, uint16 LE channels/frame_ms,
 	// uint32 LE packet count, then uint32 LE length + one raw Opus packet.
@@ -141,8 +142,8 @@ func (a *apiServer) chatAudio(w http.ResponseWriter, r *http.Request) {
 	binary.Write(&b, binary.LittleEndian, uint32(16000))
 	binary.Write(&b, binary.LittleEndian, uint16(1))
 	binary.Write(&b, binary.LittleEndian, uint16(60))
-	binary.Write(&b, binary.LittleEndian, uint32(len(m.packets)))
-	for _, p := range m.packets {
+	binary.Write(&b, binary.LittleEndian, uint32(len(packets)))
+	for _, p := range packets {
 		binary.Write(&b, binary.LittleEndian, uint32(len(p)))
 		b.Write(p)
 	}
