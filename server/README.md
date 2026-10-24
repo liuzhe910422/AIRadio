@@ -4,7 +4,17 @@
 
 调试 WAV 默认开启。服务端将收到的 Opus 解码为 16 kHz、单声道 PCM，完整上传后保存为 WAV。中断的会话删除临时文件。WAV 仅用于本地调试，不提供离线补播。
 
-需要 Go 1.24 或更高版本、CGO 编译器和 `libopus` 开发包。macOS 可运行 `brew install opus`；Debian/Ubuntu 可运行 `sudo apt install libopus-dev pkg-config`。
+需要 Go 1.24 或更高版本、CGO 编译器、`pkg-config`，以及 `libopus` 和 `libopusfile` 开发包。安装原生依赖：
+
+```sh
+# macOS（Homebrew）
+brew install opus opusfile pkg-config
+
+# Debian/Ubuntu
+sudo apt install libopus-dev libopusfile-dev pkg-config
+```
+
+如果 `go run` 报错 `Package 'opusfile' not found`，说明编译时无法找到 `libopusfile`。Go 依赖 `github.com/hraban/opus` 默认同时链接 `opus` 和 `opusfile`，只安装 `opus` 不够；即使传入 `-save-wav=false`，仍需要这些编译依赖。安装后可用 `pkg-config --modversion opus opusfile` 检查两个库是否都能找到，再重新运行服务。如果仍报错，检查 `PKG_CONFIG_PATH` 是否包含相应 `.pc` 文件所在目录。
 
 在仓库根目录运行：
 
