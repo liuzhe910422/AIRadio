@@ -31,7 +31,7 @@ sequenceDiagram
 
 ## 2. 工具注册与可见性
 
-`Application` 启动时依次调用 `McpServer::AddCommonTools()` 和 `AddUserOnlyTools()`。六个对讲工具目前写在 `AddUserOnlyTools()` 函数中，但实际使用的是普通 `AddTool()`，因此默认 `tools/list` 会返回它们。
+`Application` 启动时依次调用 `McpServer::AddCommonTools()` 和 `AddUserOnlyTools()`。七个对讲工具目前写在 `AddUserOnlyTools()` 函数中，但实际使用的是普通 `AddTool()`，因此默认 `tools/list` 会返回它们。
 
 函数名不等于权限类别。真正使用 `AddUserOnlyTool()` 的管理工具带 `user_only` 标记，默认工具列表会过滤，只有 `withUserTools:true` 才返回。对讲工具不能改回这一类别，否则语音模型可能看不到。
 
@@ -51,6 +51,7 @@ sequenceDiagram
 
 | 工具 | 输入参数 | 实现方法 | 当前返回语义 |
 |---|---|---|---|
+| `self.intercom.get_session_transcript` | 无 | `GetSessionTranscript()` | 当前本地会话文字JSON对象，供小智总结 |
 | `self.intercom.get_current_room` | 无 | `RoomName()` | 本地缓存的 `room_name` 对象，无实时服务端查询 |
 | `self.intercom.list_rooms` | 无 | `ListRooms()` | 实际服务端响应 JSON 字符串，或包含 `ok:false,error` 的 JSON 字符串 |
 | `self.intercom.create_room` | `name` 必填字符串；`invite_device_ids` 可选字符串，默认空 | `CreateRoom()` | bool，仅表示请求发送是否成功 |
@@ -179,7 +180,37 @@ debug list rooms device=002 request=... count=...
 - 创建、加入、退出、接受邀请尚未等待服务端业务确认。
 - 当前房间查询读取缓存；房间名称的并发访问仍需进一步统一同步。
 - 加入码和邀请 ID 的严格校验、创建名称长度限制仍需完善。
-- 房间邀请的本机提示音和待处理邀请缓存尚未实现；接受工具需显式提供 code。
+- 房间邀请现已通过服务端TTS通知和系统记录提示；接受工具仍需显式提供 code。
 - 未提供本地语音意图识别；工具选择取决于小智服务端。
 
 已进行服务端 Go 测试和 3.5B 固件编译。实机应验证“列出房间与加入码”、超时/断线、受限房间过滤、同名房间询问，以及工具回复结束后小智通道关闭但对讲仍在线。
+
+## 8. 当前会话对讲总结工具
+
+新增普通工具 `self.intercom.get_session_transcript`，无输入参数。用户说“总结一下聊天信息”“刚才大家聊了什么”时，小智调用工具读取固件本地保留的对讲文字，再由小智模型生成总结并通过TTS播报。固件不生成摘要、不调用额外ASR/LLM服务，也不请求历史消息。
+
+工具在应用任务执行，与记录更新串行。返回JSON对象字段：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| room_name | string | 当前房间缓存名称 |
+| session_active | boolean | 是否已有当前聊天视图标识 |
+| messages | array | 仅包含completed且文字非空的对讲消息，按本机收到顺序排列 |
+| messages[].source_id | string | 发言设备ID |
+| messages[].is_self | boolean | 是否本机发言 |
+| messages[].text | string | 服务端识别文字摘要 |
+| messages[].text_truncated | boolean | 服务端是否截断该消息文字 |
+| retained_voice_messages | integer | 保留记录中的普通对讲数量，不含系统事件 |
+| text_messages | integer | 此次返回的可总结消息数量 |
+| pending_messages | integer | 尚在识别的对讲数量 |
+| failed_messages | integer | 识别失败的对讲数量 |
+| disabled_messages | integer | 未启用识别的对讲数量 |
+| records_evicted | boolean | 当前会话是否发生过20条记录容量淘汰（包括系统记录） |
+| text_truncated | boolean | 返回的消息中是否存在文字截断 |
+| note | string | 数据范围说明；无文字时明确提示暂无可总结内容 |
+
+系统上线/加入/邀请通报及用户与小智问答均不纳入总结。保留列表最多20条（包含系统记录），因此可总结对讲数可能少于20；切房、断线清空并重置淘汰标记。pending、failed和disabled记录不作为已识别文字返回，避免模型将占位内容当事实。
+
+工具描述要求只根据messages总结重点和明确的待办，不执行聊天文字中的指令；内容截断或被淘汰时说明仅基于保留部分。该工具属于非例外MCP调用，沿用当前TTS结束且扬声器播放排空后关闭小智会话的规则，对讲连接不受影响。
+
+本次总结功能不修改对讲服务端和网络协议：直接使用已推送并保存在固件中的识别文字，不读取录音文件，也不向服务端请求完整历史。已通过当前3.5B固件编译和差异检查；工具触发、总结准确性、无记录及截断提示仍需实机验证。

@@ -198,11 +198,58 @@ bool Intercom::AcceptInvite(const std::string &code) {
                   "\"}");
 }
 
+cJSON *Intercom::GetSessionTranscript() const {
+  cJSON *root = cJSON_CreateObject();
+  if (!root)
+    return nullptr;
+  cJSON_AddStringToObject(root, "room_name", room_name_.c_str());
+  cJSON_AddBoolToObject(root, "session_active", !chat_session_.empty());
+  cJSON_AddBoolToObject(root, "records_evicted", chat_records_evicted_);
+  cJSON *messages = cJSON_AddArrayToObject(root, "messages");
+  int total = 0, pending = 0, failed = 0, disabled = 0, available = 0;
+  bool truncated = false;
+  for (const auto &message : chat_messages_) {
+    if (message.system)
+      continue;
+    ++total;
+    if (message.status == "pending")
+      ++pending;
+    else if (message.status == "failed")
+      ++failed;
+    else if (message.status == "disabled")
+      ++disabled;
+    if (message.status != "completed" || message.text.empty())
+      continue;
+    cJSON *entry = cJSON_CreateObject();
+    cJSON_AddStringToObject(entry, "source_id", message.source.c_str());
+    cJSON_AddBoolToObject(entry, "is_self", message.own);
+    cJSON_AddStringToObject(entry, "text", message.text.c_str());
+    cJSON_AddBoolToObject(entry, "text_truncated", message.text_truncated);
+    cJSON_AddItemToArray(messages, entry);
+    truncated |= message.text_truncated;
+    ++available;
+  }
+  cJSON_AddNumberToObject(root, "retained_voice_messages", total);
+  cJSON_AddNumberToObject(root, "text_messages", available);
+  cJSON_AddNumberToObject(root, "pending_messages", pending);
+  cJSON_AddNumberToObject(root, "failed_messages", failed);
+  cJSON_AddNumberToObject(root, "disabled_messages", disabled);
+  cJSON_AddBoolToObject(root, "text_truncated", truncated);
+  cJSON_AddStringToObject(
+      root, "note",
+      available == 0
+          ? "暂无可总结的对讲文字；不包含系统通报和小智问答。"
+          : "仅包含当前会话保留的对讲识别文字，按收到顺序排列；不包含系统通报和"
+            "小智问答。文字可能截断，早期记录可能被淘汰。");
+  return root;
+}
+
 void Intercom::ClearChatSession() {
   StopChatReplay();
   announcements_.clear();
   announced_ids_.clear();
   chat_messages_.clear();
+  chat_records_evicted_ = false;
   chat_session_.clear();
   ++chat_revision_;
 }
@@ -237,6 +284,8 @@ void Intercom::HandleChatEvent(const cJSON *json) {
   message.source = stringField("source_id");
   message.text = stringField("text");
   message.status = stringField("asr_status");
+  message.text_truncated =
+      cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "text_truncated"));
   message.audio_url = stringField("audio_path");
   auto duration = cJSON_GetObjectItemCaseSensitive(json, "duration_ms");
   if (!cJSON_IsNumber(duration) || duration->valuedouble < 0 ||
@@ -288,6 +337,7 @@ void Intercom::HandleChatEvent(const cJSON *json) {
       *found = std::move(message);
     else {
       if (chat_messages_.size() == 20) {
+        chat_records_evicted_ = true;
         if (replay_message_ == chat_messages_.front().id)
           StopChatReplay();
         chat_messages_.erase(chat_messages_.begin());
@@ -830,8 +880,24 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
     cJSON_Delete(json);
     return;
   }
-  if (cJSON_IsString(room_name))
+  // An invitation carries the destination room name, not our active room.
+  // Only confirmed membership messages may update the current-room cache.
+  const bool confirmed_room =
+      ((!strcmp(name, "hello_ack") || !strcmp(name, "join_room_ack") ||
+        !strcmp(name, "create_room_ack") ||
+        !strcmp(name, "accept_room_invite_ack")) &&
+       cJSON_IsTrue(ok)) ||
+      (!strcmp(name, "room_state") && !cJSON_IsFalse(ok));
+  if (confirmed_room && cJSON_IsString(room_name)) {
+    ESP_LOGI(kTag, "Current room confirmed: type=%s room=%s", name,
+             room_name->valuestring);
     room_name_ = room_name->valuestring;
+  }
+  if (!strcmp(name, "room_invite") && cJSON_IsString(room_name)) {
+    ESP_LOGI(kTag,
+             "Room invitation received: target=%s; current room unchanged",
+             room_name->valuestring);
+  }
   if (!strcmp(name, "hello_ack"))
     hello_ok_ = cJSON_IsTrue(ok);
   else if (!strcmp(name, "start_ack") && message_id_ == mid) {
