@@ -28,7 +28,7 @@ func TestAdminSessions(t *testing.T) {
 	if w := login("wrong"); w.Code != 401 {
 		t.Fatalf("wrong password accepted: %d", w.Code)
 	}
-	first, second := login("admin"), login("admin")
+	first, second := login("admin123"), login("admin123")
 	if first.Code != 200 || second.Code != 200 {
 		t.Fatal("default password rejected")
 	}
@@ -48,7 +48,7 @@ func TestAdminSessions(t *testing.T) {
 	if request(c1.Value) {
 		t.Fatal("expired session accepted")
 	}
-	r := httptest.NewRequest("POST", "https://example.test/api/login", strings.NewReader(`{"username":"admin","password":"admin"}`))
+	r := httptest.NewRequest("POST", "https://example.test/api/login", strings.NewReader(`{"username":"admin","password":"admin123"}`))
 	w := httptest.NewRecorder()
 	a.login(w, r)
 	if !w.Result().Cookies()[0].Secure {
