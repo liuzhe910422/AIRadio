@@ -409,7 +409,7 @@ hello 可增加 `chat_enabled:true`；默认为 false，旧固件不收到聊天
 
 二进制格式均为小端：`AIR1`（4字节魔数）、uint32 采样率16000、uint16 声道1、uint16 帧时长60、uint32 包数；随后重复 uint32 包长加对应原始 Opus 包。禁止把各包直接拼接给解码器。响应 Content-Type 为 application/octet-stream，Cache-Control 为 no-store。
 
-控制台已增加“ASR 配置”tab。固件右侧气泡显示和回放尚未接入，需后续声明 chat_enabled 并处理这些事件。
+控制台已增加“ASR 配置”tab。3.5B 固件已声明 chat_enabled:true，右侧以彩色文字按钮显示消息并支持 AIR1 分帧下载回放；单击播放，再次点击停止。记录最多20条，切房/断线清空。
 
 回放公网地址可配置为 `-public-base-url http://111.62.241.117:9200`，与本地监听地址独立。audio_path 不携带凭据，下载无需 Authorization 头。
 

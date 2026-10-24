@@ -1,26 +1,25 @@
 
-#include "config.h"
 #include "custom_lcd_display.h"
-#include "lcd_display.h"
-#include "assets/lang_config.h"
-#include "settings.h"
-#include "board.h"
 #include "application.h"
+#include "assets/lang_config.h"
+#include "board.h"
+#include "config.h"
+#include "lcd_display.h"
+#include "settings.h"
 
-#include <vector>
 #include <cstring>
 #include <string>
+#include <vector>
 
-#include <esp_lcd_panel_io.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include <freertos/semphr.h>
-#include <esp_log.h>
 #include <esp_err.h>
+#include <esp_lcd_panel_io.h>
+#include <esp_log.h>
 #include <esp_lvgl_port.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 
 #define TAG "CustomLcdDisplay"
-
 
 static SemaphoreHandle_t trans_done_sem = NULL;
 static uint16_t *trans_act;
@@ -28,85 +27,174 @@ static uint16_t *trans_buf_1;
 static uint16_t *trans_buf_2;
 
 void CustomLcdDisplay::SetupUI() {
-    LcdDisplay::SetupUI();
-    if (!Lock(1000)) return;
-    // The 3.5B is a 480x320 landscape display. Keep the left control rail
-    // fixed and leave the right side for the existing assistant transcript.
-    if (content_) {
-        lv_obj_set_width(content_, 300);
-        lv_obj_set_height(content_, 284);
-        lv_obj_align(content_, LV_ALIGN_TOP_RIGHT, 0, 28);
-        lv_obj_set_style_pad_bottom(content_, 8, 0);
-    }
-    intercom_bar_ = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(intercom_bar_, 180, 320);
-    lv_obj_align(intercom_bar_, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_set_style_radius(intercom_bar_, 0, 0);
-    lv_obj_set_style_border_width(intercom_bar_, 0, 0);
-    lv_obj_set_style_bg_color(intercom_bar_, lv_color_hex(0xF4F7F6), 0);
-    lv_obj_set_style_pad_all(intercom_bar_, 8, 0);
-    device_status_label_ = lv_label_create(intercom_bar_);
-    lv_label_set_text(device_status_label_, "设备状态\nWi-Fi · 小智");
-    lv_obj_set_width(device_status_label_, 164);
-    lv_obj_align(device_status_label_, LV_ALIGN_TOP_LEFT, 0, 4);
-    intercom_status_label_ = lv_label_create(intercom_bar_);
-    lv_label_set_text(intercom_status_label_, "对讲状态\n房间：默认房间");
-    lv_obj_set_width(intercom_status_label_, 164);
-    lv_obj_align(intercom_status_label_, LV_ALIGN_TOP_LEFT, 0, 48);
-    intercom_button_ = lv_button_create(intercom_bar_);
-    lv_obj_set_size(intercom_button_, 145, 82);
-    lv_obj_align(intercom_button_, LV_ALIGN_CENTER, 0, 32);
-    intercom_label_ = lv_label_create(intercom_button_);
-    lv_obj_center(intercom_label_);
-    lv_obj_add_event_cb(intercom_button_, [](lv_event_t*) {
-        ESP_LOGI(TAG, "Intercom button pressed");
-    }, LV_EVENT_PRESSED, nullptr);
-    lv_obj_add_event_cb(intercom_button_, [](lv_event_t*) {
+  LcdDisplay::SetupUI();
+  if (!Lock(1000))
+    return;
+  // Own a separate transcript panel: the base display's content may be a
+  // subtitle label rather than a scrollable message container.
+  auto screen = lv_screen_active();
+  auto panel = lv_obj_create(screen);
+  lv_obj_set_size(panel, 300, 320);
+  lv_obj_align(panel, LV_ALIGN_TOP_RIGHT, 0, 0);
+  lv_obj_set_style_pad_all(panel, 8, 0);
+  lv_obj_set_style_border_width(panel, 1, 0);
+  lv_obj_set_style_bg_color(panel, lv_color_hex(0xF4F7F6), 0);
+  lv_obj_set_style_text_color(panel, lv_color_hex(0x17332D), 0);
+  lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+  auto title = lv_label_create(panel);
+  lv_label_set_text(title, "对讲记录");
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+  chat_list_ = lv_obj_create(panel);
+  lv_obj_set_size(chat_list_, 282, 270);
+  lv_obj_align(chat_list_, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_pad_all(chat_list_, 4, 0);
+  lv_obj_set_style_border_width(chat_list_, 0, 0);
+  lv_obj_set_flex_flow(chat_list_, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(chat_list_, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(chat_list_, LV_SCROLLBAR_MODE_AUTO);
+  intercom_bar_ = lv_obj_create(lv_screen_active());
+  lv_obj_set_size(intercom_bar_, 180, 320);
+  lv_obj_align(intercom_bar_, LV_ALIGN_LEFT_MID, 0, 0);
+  lv_obj_set_style_radius(intercom_bar_, 0, 0);
+  lv_obj_set_style_border_width(intercom_bar_, 0, 0);
+  lv_obj_set_style_bg_color(intercom_bar_, lv_color_hex(0xF4F7F6), 0);
+  lv_obj_set_style_pad_all(intercom_bar_, 8, 0);
+  device_status_label_ = lv_label_create(intercom_bar_);
+  lv_label_set_text(device_status_label_, "设备状态\nWi-Fi · 小智");
+  lv_obj_set_width(device_status_label_, 164);
+  lv_obj_align(device_status_label_, LV_ALIGN_TOP_LEFT, 0, 4);
+  intercom_status_label_ = lv_label_create(intercom_bar_);
+  lv_label_set_text(intercom_status_label_, "对讲状态\n房间：默认房间");
+  lv_obj_set_width(intercom_status_label_, 164);
+  lv_obj_align(intercom_status_label_, LV_ALIGN_TOP_LEFT, 0, 48);
+  intercom_button_ = lv_button_create(intercom_bar_);
+  lv_obj_set_size(intercom_button_, 145, 82);
+  lv_obj_align(intercom_button_, LV_ALIGN_CENTER, 0, 32);
+  intercom_label_ = lv_label_create(intercom_button_);
+  lv_obj_center(intercom_label_);
+  lv_obj_add_event_cb(
+      intercom_button_,
+      [](lv_event_t *) { ESP_LOGI(TAG, "Intercom button pressed"); },
+      LV_EVENT_PRESSED, nullptr);
+  lv_obj_add_event_cb(
+      intercom_button_,
+      [](lv_event_t *) {
         ESP_LOGI(TAG, "Intercom button clicked");
-        auto& app = Application::GetInstance();
+        auto &app = Application::GetInstance();
         app.Schedule([&app]() { app.GetIntercom().Press(); });
-    }, LV_EVENT_CLICKED, nullptr);
-    // Ending is done by pressing the main talk button again. Keep the
-    // cancellation control available to the application but hide it from
-    // this simplified touch UI.
-    intercom_cancel_ = nullptr;
-    Unlock();
-    UpdateIntercom();
+      },
+      LV_EVENT_CLICKED, nullptr);
+  // Ending is done by pressing the main talk button again. Keep the
+  // cancellation control available to the application but hide it from
+  // this simplified touch UI.
+  intercom_cancel_ = nullptr;
+  Unlock();
+  UpdateIntercom();
 }
 
 void CustomLcdDisplay::UpdateIntercom() {
-    if (!intercom_label_ || !Lock(100)) return;
-    auto& intercom = Application::GetInstance().GetIntercom();
-    lv_label_set_text(intercom_label_, intercom.Status());
-    if (intercom_status_label_) {
-        std::string text = "对讲状态\n房间：" + std::string(intercom.RoomName()) +
-                            "\n" + intercom.Status();
-        lv_label_set_text(intercom_status_label_, text.c_str());
-    }
-    if (device_status_label_) lv_label_set_text(device_status_label_, "设备状态\nWi-Fi · 小智");
-    if (intercom.CanRecord() || intercom.IsRecording()) lv_obj_remove_state(intercom_button_, LV_STATE_DISABLED);
-    else lv_obj_add_state(intercom_button_, LV_STATE_DISABLED);
-    Unlock();
+  if (!intercom_label_ || !Lock(100))
+    return;
+  auto &intercom = Application::GetInstance().GetIntercom();
+  lv_label_set_text(intercom_label_, intercom.Status());
+  if (intercom_status_label_) {
+    std::string text = "对讲状态\n房间：" + std::string(intercom.RoomName()) +
+                       "\n" + intercom.Status();
+    lv_label_set_text(intercom_status_label_, text.c_str());
+  }
+  if (device_status_label_)
+    lv_label_set_text(device_status_label_, "设备状态\nWi-Fi · 小智");
+  if (intercom.CanRecord() || intercom.IsRecording())
+    lv_obj_remove_state(intercom_button_, LV_STATE_DISABLED);
+  else
+    lv_obj_add_state(intercom_button_, LV_STATE_DISABLED);
+  UpdateChatRecords();
+  Unlock();
 }
 
-void CustomLcdDisplay::SetChatMessage(const char* role, const char* content) {
-    // Keep assistant replies in the left control rail on this board; the
-    // right column remains reserved for the future intercom timeline.
-    if (!intercom_bar_ || !role || strcmp(role, "assistant") != 0) {
-        LcdDisplay::SetChatMessage(role, content);
-        return;
-    }
-    if (!Lock(100)) return;
-    if (!assistant_message_label_) {
-        assistant_message_label_ = lv_label_create(intercom_bar_);
-        lv_obj_set_width(assistant_message_label_, 164);
-        lv_label_set_long_mode(assistant_message_label_, LV_LABEL_LONG_WRAP);
-        // Keep the assistant reply below the large talk button so it never
-        // overlaps the primary touch target.
-        lv_obj_align(assistant_message_label_, LV_ALIGN_BOTTOM_LEFT, 0, -4);
-    }
-    lv_label_set_text(assistant_message_label_, content ? content : "");
-    Unlock();
+void CustomLcdDisplay::SetChatMessage(const char *role, const char *content) {
+  // Keep assistant replies in the left control rail on this board; the
+  // right column remains reserved for the future intercom timeline.
+  if (intercom_bar_ && role && strcmp(role, "user") == 0)
+    return;
+  if (!intercom_bar_ || !role || strcmp(role, "assistant") != 0) {
+    LcdDisplay::SetChatMessage(role, content);
+    return;
+  }
+  if (!Lock(100))
+    return;
+  if (!assistant_message_label_) {
+    assistant_message_label_ = lv_label_create(intercom_bar_);
+    lv_obj_set_width(assistant_message_label_, 164);
+    lv_label_set_long_mode(assistant_message_label_, LV_LABEL_LONG_WRAP);
+    // Keep the assistant reply below the large talk button so it never
+    // overlaps the primary touch target.
+    lv_obj_align(assistant_message_label_, LV_ALIGN_BOTTOM_LEFT, 0, -4);
+  }
+  lv_label_set_text(assistant_message_label_, content ? content : "");
+  Unlock();
+}
+
+void CustomLcdDisplay::UpdateChatRecords() {
+  if (!chat_list_)
+    return;
+  auto &intercom = Application::GetInstance().GetIntercom();
+  if (chat_revision_ == intercom.ChatRevision())
+    return;
+  chat_revision_ = intercom.ChatRevision();
+  const auto old_scroll = lv_obj_get_scroll_y(chat_list_);
+  const bool at_bottom = lv_obj_get_scroll_bottom(chat_list_) < 24;
+  lv_obj_clean(chat_list_);
+  const auto &messages = intercom.ChatMessages();
+  if (messages.empty()) {
+    auto empty = lv_label_create(chat_list_);
+    lv_label_set_text(empty, "暂无对讲记录");
+  }
+  for (const auto &message : messages) {
+    auto button = lv_button_create(chat_list_);
+    lv_obj_set_width(button, LV_PCT(100));
+    lv_obj_set_height(button, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(button, 8, 0);
+    const bool playing = intercom.ReplayMessage() == message.id;
+    lv_obj_set_style_bg_color(
+        button,
+        lv_color_hex(playing ? 0xFFD690 : (message.own ? 0xCDEAD9 : 0xDFEAF5)),
+        0);
+    lv_obj_set_style_text_color(button, lv_color_hex(0x17332D), 0);
+    auto label = lv_label_create(button);
+    lv_obj_set_width(label, LV_PCT(100));
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    std::string text = (message.own ? "我" : message.source) + " · " +
+                       std::to_string((message.duration_ms + 999) / 1000) +
+                       "秒" + (playing ? " · 点击停止" : " · 点击播放") + "\n";
+    text += !message.text.empty()
+                ? message.text
+                : (message.status == "pending" ? "正在识别…" : "语音消息");
+    lv_label_set_text(label, text.c_str());
+    auto id = new std::string(message.id);
+    lv_obj_add_event_cb(
+        button,
+        [](lv_event_t *event) {
+          auto id = static_cast<std::string *>(lv_event_get_user_data(event));
+          if (lv_event_get_code(event) == LV_EVENT_DELETE) {
+            delete id;
+            return;
+          }
+          if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+            auto &app = Application::GetInstance();
+            app.Schedule(
+                [id = *id, &app]() { app.GetIntercom().PlayChatMessage(id); });
+          }
+        },
+        LV_EVENT_ALL, id);
+    if (!message.available)
+      lv_obj_add_state(button, LV_STATE_DISABLED);
+  }
+  lv_obj_update_layout(chat_list_);
+  if (at_bottom)
+    lv_obj_scroll_to_y(chat_list_, LV_COORD_MAX, LV_ANIM_OFF);
+  else
+    lv_obj_scroll_to_y(chat_list_, old_scroll, LV_ANIM_OFF);
 }
 
 bool CustomLcdDisplay::lvgl_port_flush_io_ready_callback(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)

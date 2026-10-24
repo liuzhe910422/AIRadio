@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "chat_message.h"
 #include "protocol.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -36,6 +37,14 @@ public:
   bool LeaveRoom();
   bool AcceptInvite(const std::string &code);
   std::string ListRooms();
+  // UI access and controls run on Application's task only.
+  const std::vector<IntercomChatMessage> &ChatMessages() const {
+    return chat_messages_;
+  }
+  uint32_t ChatRevision() const { return chat_revision_; }
+  const std::string &ReplayMessage() const { return replay_message_; }
+  void PlayChatMessage(const std::string &id);
+  void StopChatReplay();
 
 private:
   enum class State {
@@ -45,8 +54,20 @@ private:
     Ready,
     Recording,
     Sending,
-    Playing
+    Playing,
+    Replaying
   };
+  std::vector<IntercomChatMessage> chat_messages_;
+  std::string chat_session_;
+  std::string replay_message_;
+  uint32_t chat_revision_ = 0;
+  std::atomic<uint32_t> replay_generation_{0};
+  std::atomic<bool> replay_task_active_{false};
+  std::mutex replay_mutex_;
+  bool replay_download_done_ = false;
+  void ClearChatSession();
+  void HandleChatEvent(const struct cJSON *json);
+  void ReplayTask(std::string url, uint32_t generation);
   Application &app_;
   std::atomic<State> state_{State::Disabled};
   std::atomic<bool> network_{false};
