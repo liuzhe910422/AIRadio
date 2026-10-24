@@ -95,6 +95,7 @@ type chatRecipient struct {
 	token string
 }
 type chatMessage struct {
+	Automated     bool   `json:"automated,omitempty"`
 	EventKind     string `json:"event_kind,omitempty"`
 	EventRoom     string `json:"event_room_id,omitempty"`
 	EventRoomName string `json:"event_room_name,omitempty"`
@@ -119,20 +120,22 @@ type chatJob struct {
 	config  asrConfig
 }
 type chatService struct {
-	ttsConfig ttsConfig
-	ttsJobs   chan ttsJob
-	ttsClient *http.Client
-	mu        sync.Mutex
-	config    asrConfig
-	messages  []*chatMessage
-	bytes     int
-	jobs      chan chatJob
-	slots     chan struct{}
-	client    *http.Client
+	hostingConfig hostingConfig
+	hostingJobs   chan hostingJob
+	ttsConfig     ttsConfig
+	ttsJobs       chan ttsJob
+	ttsClient     *http.Client
+	mu            sync.Mutex
+	config        asrConfig
+	messages      []*chatMessage
+	bytes         int
+	jobs          chan chatJob
+	slots         chan struct{}
+	client        *http.Client
 }
 
 func newChatService() *chatService {
-	return &chatService{ttsConfig: defaultTTSConfig(), ttsJobs: make(chan ttsJob, 16), ttsClient: &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, config: asrConfig{Model: defaultASRModel}, jobs: make(chan chatJob, 16), slots: make(chan struct{}, 2), client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &chatService{hostingConfig: defaultHostingConfig(), hostingJobs: make(chan hostingJob, 16), ttsConfig: defaultTTSConfig(), ttsJobs: make(chan ttsJob, 16), ttsClient: &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, config: asrConfig{Model: defaultASRModel}, jobs: make(chan chatJob, 16), slots: make(chan struct{}, 2), client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // One dispatcher per running HTTP service, stopped along with its context.
@@ -304,6 +307,9 @@ func (c *chatService) process(ctx context.Context, s *server, job chatJob) {
 	}
 	c.mu.Unlock()
 	s.sendChat(job.message, "chat_message_update")
+	if err == nil {
+		s.queueHosting(job.message)
+	}
 }
 func (p *peer) playbackToken() string {
 	p.chatTokenMu.Lock()
@@ -311,6 +317,8 @@ func (p *peer) playbackToken() string {
 	return p.chatToken
 }
 func (s *server) resetChatView(p *peer) {
+	p.hosted.Store(false)
+	p.hostingEpoch.Add(1)
 	p.chatTokenMu.Lock()
 	defer p.chatTokenMu.Unlock()
 	p.chatToken = randomToken()

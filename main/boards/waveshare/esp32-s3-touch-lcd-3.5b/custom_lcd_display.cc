@@ -97,6 +97,8 @@ void CustomLcdDisplay::UpdateIntercom() {
     return;
   auto &intercom = Application::GetInstance().GetIntercom();
   lv_label_set_text(intercom_label_, intercom.Status());
+  lv_obj_set_style_bg_color(intercom_button_,lv_color_hex(intercom.IsHosted()?0xE6B83D:0x3187C8),0);
+  lv_obj_set_style_text_color(intercom_button_,intercom.IsHosted()?lv_color_hex(0x302600):lv_color_white(),0);
   if (intercom_status_label_) {
     std::string text = "对讲状态\n房间：" + std::string(intercom.RoomName()) +
                        "\n" + intercom.Status();
@@ -104,7 +106,7 @@ void CustomLcdDisplay::UpdateIntercom() {
   }
   if (device_status_label_)
     lv_label_set_text(device_status_label_, "设备状态\nWi-Fi · 小智");
-  if (intercom.CanRecord() || intercom.IsRecording())
+  if (intercom.IsHosted() || intercom.CanRecord() || intercom.IsRecording())
     lv_obj_remove_state(intercom_button_, LV_STATE_DISABLED);
   else
     lv_obj_add_state(intercom_button_, LV_STATE_DISABLED);
@@ -165,7 +167,7 @@ void CustomLcdDisplay::UpdateChatRecords() {
     lv_obj_set_width(label, LV_PCT(100));
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
     std::string text = (message.system ? "房间通知" : (message.own ? "我" : message.source)) + " · " +
-                       std::to_string((message.duration_ms + 999) / 1000) +
+                       (message.automated ? std::string("托管回复 · ") : std::string()) + std::to_string((message.duration_ms + 999) / 1000) +
                        "秒" + (playing ? " · 点击停止" : " · 点击播放") + "\n";
     text += !message.text.empty()
                 ? message.text

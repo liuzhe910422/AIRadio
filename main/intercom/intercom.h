@@ -31,6 +31,8 @@ public:
   const char *Status() const;
   const char *RoomName() const { return room_name_.c_str(); }
   bool CanRecord() const;
+  bool IsHosted() const { return hosted_; }
+  bool SetHosted(bool enabled);
   bool CreateRoom(const std::string &name,
                   const std::vector<std::string> &invite_ids);
   bool JoinRoom(const std::string &code);
@@ -73,6 +75,7 @@ private:
   void ClearChatSession();
   void HandleChatEvent(const struct cJSON *json);
   void ReplayTask(std::string url, uint32_t generation);
+  std::atomic<bool> hosted_{false};
   Application &app_;
   std::atomic<State> state_{State::Disabled};
   std::atomic<bool> network_{false};

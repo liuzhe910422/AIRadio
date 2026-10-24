@@ -443,3 +443,9 @@ hello 可增加 `chat_enabled:true`；默认为 false，旧固件不收到聊天
 固件系统记录用独立底色显示；收到announce后按ID去重，待播队列最多4条（满时丢最早待播项），音频空闲才播放。实时对讲和助手回复优先；已开始通报沿用可被实时对讲打断的回放链路。断线、切房清空队列，旧session识别/合成更新不显示。当前逐条通报，尚未合并多人加入播报；离线邀请不补发。
 
 上线通报在hello_ack之后发送给当前房间在线且chat_enabled的设备（包含上线者）。其它成员收到“设备003已上线，当前在某房间”，上线者收到“你已上线，当前在某房间”。默认房间同样播报，每次重连也播报。返回默认房间会生成member_joined事件。
+
+## 11. 托管模式
+
+新增set_hosting(enabled:boolean)及hosting_state(ok/enabled/error)控制帧。启用需ASR、TTS和LLM已开启；仅作用于当前连接，切房/断线清除。真人ASR完成后，模型判断是否回复，自动回复通过现有start/Binary/end广播，聊天记录额外标记automated:true，不再次触发ASR或模型判断。
+
+GET/PUT /api/hosting/config和POST /api/hosting/test沿用管理员登录。模型默认为qwen3.8-flash，配置支持URL、Key、model、prompt和enabled；查询不返回Key。详细流程和限制见[托管模式设计](intercom-hosting.md)。
