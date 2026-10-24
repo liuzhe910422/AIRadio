@@ -32,6 +32,7 @@ const (
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 type control struct {
+	DeviceType      string        `json:"device_type,omitempty"`
 	Enabled         *bool         `json:"enabled,omitempty"`
 	ChatEnabled     bool          `json:"chat_enabled,omitempty"`
 	ChatSessionID   string        `json:"chat_session_id,omitempty"`
@@ -87,6 +88,9 @@ type outgoing struct {
 }
 
 type peer struct {
+	deleted         atomic.Bool
+	remoteAddress   string
+	deviceType      string
 	hosted          atomic.Bool
 	hostingEpoch    atomic.Uint64
 	hostingBusy     bool
@@ -162,6 +166,8 @@ func (p *peer) writer() {
 }
 
 type server struct {
+	usersMu       sync.Mutex
+	users         map[string]consoleUser
 	publicBaseURL string
 	chat          *chatService
 	mu            sync.Mutex
@@ -218,7 +224,7 @@ func (s *server) register(p *peer, id string) error {
 	p.id = id
 	s.resetChatView(p)
 	s.peers[id] = p
-	p.roomID = s.store.RegisterDevice(id, "").ID
+	p.roomID = s.store.RegisterDevice(id, p.remoteAddress, p.deviceType).ID
 	log.Printf("connect id=%s online=%d", id, len(s.peers))
 	return nil
 }
@@ -415,7 +421,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	p := &peer{conn: conn, out: make(chan outgoing, 16), stop: make(chan struct{}), srv: s}
+	p := &peer{remoteAddress: r.RemoteAddr, conn: conn, out: make(chan outgoing, 16), stop: make(chan struct{}), srv: s}
 	defer p.close()
 	conn.SetReadLimit(maxFrame + maxControl)
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
@@ -425,6 +431,17 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var hello control
+	if json.Unmarshal(data, &hello) != nil {
+		return
+	}
+	p.deviceType = hello.DeviceType
+	if p.deviceType == "" {
+		p.deviceType = "physical"
+	}
+	if p.deviceType != "physical" && p.deviceType != "simulator" {
+		conn.WriteJSON(answer("hello_ack", "", false, "invalid device_type"))
+		return
+	}
 	if json.Unmarshal(data, &hello) != nil || hello.Type != "hello" || hello.Version != 1 || s.register(p, hello.DeviceID) != nil {
 		log.Printf("debug ws hello rejected remote=%s", r.RemoteAddr)
 		conn.WriteJSON(answer("hello_ack", "", false, "invalid version or device_id"))
@@ -443,6 +460,9 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		kind, data, err = conn.ReadMessage()
 		if err != nil {
 			log.Printf("read ended id=%s: %v", p.id, err)
+			return
+		}
+		if p.deleted.Load() {
 			return
 		}
 		if kind == websocket.BinaryMessage {

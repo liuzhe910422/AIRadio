@@ -23,10 +23,10 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
-| `username` | string | 是 | 当前实现必须为 `admin` |
-| `password` | string | 是 | 当前实现必须为 `admin` |
+| `username` | string | 是 | 初始账号为 `admin`，支持用户管理中新建的账号 |
+| `password` | string | 是 | 对应账号密码；初始为 `admin123` |
 
-成功：`200`，并设置 `airadio_admin=admin-session` Cookie。
+成功：`200`，并设置随机值的 `airadio_admin` Cookie。
 
 ```json
 {"ok":true}
@@ -449,3 +449,55 @@ hello 可增加 `chat_enabled:true`；默认为 false，旧固件不收到聊天
 新增set_hosting(enabled:boolean)及hosting_state(ok/enabled/error)控制帧。启用需ASR、TTS和LLM已开启；仅作用于当前连接，切房/断线清除。真人ASR完成后，模型判断是否回复，自动回复通过现有start/Binary/end广播，聊天记录额外标记automated:true，不再次触发ASR或模型判断。
 
 GET/PUT /api/hosting/config和POST /api/hosting/test沿用管理员登录。模型默认为qwen3.8-flash，配置支持URL、Key、model、prompt和enabled；查询不返回Key。详细流程和限制见[托管模式设计](intercom-hosting.md)。
+
+## 12. 管理端房间编辑与删除
+
+`PATCH /api/rooms/{id}`（管理员Cookie）接收完整编辑值：name（去首尾空格，1～80字符）、invite_device_ids（设备ID数组，空为开放加入）。返回房间对象，包含invite_device_ids、created_by_device_id。房间ID和加入码不变；默认或已关闭房间不可编辑。非法值返回400。
+
+修改邀请范围不移动设备，不自动移除已有成员；仅向新增受邀在线设备发送room_invite和系统记录。名称变化向当前在线成员发送room_state，不重置聊天session。设备列表通过GET /api/devices获取，以room_id统计实际成员和online状态。
+
+删除按钮使用POST /api/rooms/{id}/close软关闭房间。默认房间不可关闭；房间正在发言时返回409，待结束后重试。关闭后设备归属持久化为默认房间，在线设备收到带新chat_session_id的room_state，清空旧记录并退出托管；加入码失效。控制台编辑弹窗每5秒更新设备在线状态。
+
+编辑弹窗仅列出room_id等于当前房间的设备（含离线成员），无成员时显示空状态。未展示设备的原有邀请设置在保存时保留；开放加入开关启用时仍按空邀请列表保存。
+
+## 13. 控制台用户管理
+
+所有已登录用户具有相同功能，本阶段不区分角色或资源归属。登录POST /api/login从users表验证账号；新数据库初始账号admin、密码admin123，已有admin表首次启动时迁移到users，不覆盖已有用户密码。无-db模式使用内存用户，重启清空新增用户。
+
+- GET /api/users：需登录，返回username、created_at数组，不返回密码或摘要。
+- POST /api/users：需登录，JSON包含username和password；用户名为1～32位ASCII字母、数字、下划线或短横线，密码6～128字节。成功返回ok:true，重复用户名或非法参数返回400。
+- PUT /api/users/{username}/password：需登录，JSON包含password，重置指定用户密码；成功后清除当前进程全部登录会话，用户需要重新登录。
+
+SQLite users表保存username主键、password_hash和created_at。密码使用PBKDF2-HMAC-SHA256（100000次、随机salt）摘要存储，不保存明文。admin表仅用于旧账号迁移，迁移后修改用户密码不会被旧表覆盖。每次登录生成独立随机Cookie会话，HttpOnly及SameSite=Lax。当前不提供删除用户、角色权限或公开注册接口。
+
+控制台“用户管理”tab提供创建用户、用户列表和重置密码；密码字段不预填。新账号可直接登录使用全部功能。
+
+### 退出登录
+
+`POST /api/logout`：撤销当前Cookie对应的登录会话并清除airadio_admin Cookie，返回`{"ok":true}`。无Cookie或已退出时同样成功，其它用户会话不受影响；GET返回405。控制台登录后显示“退出登录”，成功后重新加载登录页，页面模拟器连接及采集随页面卸载结束。
+
+### 设备总览
+
+控制台“设备列表”tab位于用户管理前，GET /api/devices额外返回room_name和hosted；在线状态由当前连接判断，离线设备不展示实时工作模式。支持设备ID/房间搜索、在线筛选、每5秒刷新和手动刷新。last_seen_at目前表示最近hello注册时间，并非持续心跳时间；last_ip从新连接的RemoteAddr记录，经过反向代理时可能是代理地址，旧设备尚未重连时可能为空。
+
+### 设备类型
+
+hello可包含device_type字符串，允许simulator（浏览器模拟器）或physical（真实固件），未传时按physical处理。其它值拒绝注册。类型持久化到devices.device_type，GET /api/devices返回device_type，设备列表显示模拟设备/真实设备/未知。旧记录迁移为空，重连后补齐；此标识是客户端自报属性，不是身份认证。浏览器卡片不决定真实设备类型，通过POST /api/devices创建时即登记为simulator；已有卡片在成功hello后也会更新类型。
+
+### 删除模拟设备（替代仅隐藏卡片行为）
+
+DELETE /api/devices/{device_id}需登录，删除device_type=simulator的设备注册和房间实际成员关系，断开当前连接并取消托管；真实设备和未知类型返回400。不存在设备幂等返回ok:true。不会关闭房间或改写房间创建者、邀请名单等历史/配置字段。浏览器删除成功后释放录音/播放资源并刷新房间和设备列表；从未注册的本地卡片也可移除。删除成功后刷新不再恢复该设备，重新添加同一ID会创建新的离线模拟设备。
+
+### 刷新页面恢复登录
+
+GET /api/session验证当前airadio_admin Cookie：有效返回200及ok:true，失效返回401，其它方法405。页面加载时先检查已有会话，有效则恢复控制台，无需重复输入密码。登录会话仍只保存在服务进程内，服务重启、退出或重置密码清除会话后需要重新登录；不会把明文密码存入浏览器。
+
+### 创建离线模拟设备
+
+POST /api/devices需登录，JSON包含device_id（1～32位字母数字下划线短横线）。创建simulator类型的离线设备，初始默认房间、最近连接时间为空，不生成hello上线通报；重复ID返回400，不覆盖已有设备。控制台“添加设备”会先调用此接口，成功后显示卡片，因此不点击连接也能在设备总览看到并在刷新后恢复。WebSocket连接才更新在线状态及最近连接信息。
+
+### 控制台展示补充
+
+登录使用居中卡片，控制台以选项卡展示。房间卡片与编辑弹窗显示created_by_device_id，默认房间显示系统创建，旧记录无创建者时显示未记录。编辑弹窗另设已邀请设备区域，显示邀请ID、在线状态和是否加入；实际成员列表仍仅列当前房间成员，状态每5秒刷新。
+
+SQLite设备恢复查询显式使用COALESCE(room_id,'') AS room_id，保证已加入房间在服务重启及再次hello后仍恢复，不回退默认房间。

@@ -27,23 +27,29 @@ type room struct {
 	Invited   []string `json:"invite_device_ids,omitempty"`
 }
 type device struct {
-	ID       string `json:"device_id"`
-	LastSeen string `json:"last_seen_at"`
-	IP       string `json:"last_ip"`
-	Online   bool   `json:"online"`
-	RoomID   string `json:"room_id"`
+	DeviceType string `json:"device_type"`
+	RoomName   string `json:"room_name"`
+	Hosted     bool   `json:"hosted"`
+	ID         string `json:"device_id"`
+	LastSeen   string `json:"last_seen_at"`
+	IP         string `json:"last_ip"`
+	Online     bool   `json:"online"`
+	RoomID     string `json:"room_id"`
 }
 
 type roomStore interface {
-	RegisterDevice(id, ip string) room
+	RegisterDevice(id, ip string, deviceType ...string) room
 	CurrentRoom(deviceID string) room
 	Join(deviceID, code string) (room, error)
 	Leave(deviceID string) room
 	CreateRoom(name, creator string, invited []string) (room, error)
+	UpdateRoom(id, name string, invited []string) (room, error)
 	ListRooms() []room
 	RoomDevices(id string) []device
 	CloseRoom(id string) error
 	ReturnDefault(id string) error
+	CreateSimulator(id string) error
+	DeleteSimulator(id string) error
 	ListDevices() []device
 }
 
@@ -56,13 +62,16 @@ type memoryStore struct {
 func newMemoryStore() *memoryStore {
 	return &memoryStore{rooms: map[string]*room{"default": {ID: "default", Name: "默认房间", Default: true}}, devices: map[string]*device{}}
 }
-func (s *memoryStore) RegisterDevice(id, ip string) room {
+func (s *memoryStore) RegisterDevice(id, ip string, deviceType ...string) room {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d := s.devices[id]
 	if d == nil {
 		d = &device{ID: id}
 		s.devices[id] = d
+	}
+	if len(deviceType) > 0 {
+		d.DeviceType = deviceType[0]
 	}
 	d.LastSeen = time.Now().UTC().Format(time.RFC3339)
 	d.IP = ip
@@ -239,9 +248,13 @@ func newSQLiteStore(path string) (*sqliteStore, error) {
 		}
 	}
 	s := &sqliteStore{path: path, memoryStore: newMemoryStore()}
+	if err := s.initAdmin(); err != nil {
+		return nil, err
+	}
 	if _, err := s.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS devices(device_id TEXT PRIMARY KEY,last_seen_at TEXT,ip TEXT,room_id TEXT); CREATE TABLE IF NOT EXISTS rooms(id TEXT PRIMARY KEY,name TEXT,join_code TEXT UNIQUE,is_default INTEGER,status TEXT,created_by TEXT,invite_device_ids TEXT DEFAULT '');`); err != nil {
 		return nil, err
 	}
+	_, _ = s.exec(`ALTER TABLE devices ADD COLUMN device_type TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.exec(`ALTER TABLE rooms ADD COLUMN invite_device_ids TEXT DEFAULT ''`)
 	_, err := s.exec(`INSERT OR IGNORE INTO rooms(id,name,join_code,is_default,status,created_by) VALUES('default','默认房间','',1,'active','')`)
 	if err == nil {
@@ -269,7 +282,7 @@ func (s *sqliteStore) persistDevice(id string) {
 	if d == nil {
 		return
 	}
-	q := fmt.Sprintf("INSERT INTO devices(device_id,last_seen_at,ip,room_id) VALUES(%s,%s,%s,%s) ON CONFLICT(device_id) DO UPDATE SET last_seen_at=excluded.last_seen_at,ip=excluded.ip,room_id=excluded.room_id", sqliteString(d.ID), sqliteString(d.LastSeen), sqliteString(d.IP), sqliteString(d.RoomID))
+	q := fmt.Sprintf("INSERT INTO devices(device_id,last_seen_at,ip,room_id,device_type) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(device_id) DO UPDATE SET last_seen_at=excluded.last_seen_at,ip=excluded.ip,room_id=excluded.room_id,device_type=excluded.device_type", sqliteString(d.ID), sqliteString(d.LastSeen), sqliteString(d.IP), sqliteString(d.RoomID), sqliteString(d.DeviceType))
 	if _, err := s.exec(q); err != nil {
 		log.Printf("debug sqlite persist device=%s error=%v", id, err)
 	}
@@ -299,19 +312,20 @@ func (s *sqliteStore) load() {
 	} else {
 		log.Printf("debug sqlite load rooms error=%v", err)
 	}
-	if b, err := s.exec("SELECT device_id,last_seen_at,ip,COALESCE(room_id,'') FROM devices"); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+	if b, err := s.exec("SELECT device_id,last_seen_at,ip,COALESCE(room_id,'') AS room_id,device_type FROM devices"); err == nil && len(strings.TrimSpace(string(b))) > 0 {
 		var rows []struct {
-			ID     string `json:"device_id"`
-			Seen   string `json:"last_seen_at"`
-			IP     string `json:"ip"`
-			RoomID string `json:"room_id"`
+			ID         string `json:"device_id"`
+			Seen       string `json:"last_seen_at"`
+			IP         string `json:"ip"`
+			RoomID     string `json:"room_id"`
+			DeviceType string `json:"device_type"`
 		}
 		if e := json.Unmarshal(b, &rows); e != nil {
 			log.Printf("debug sqlite load devices error=%v output=%s", e, b)
 		} else {
 			log.Printf("debug sqlite loaded devices=%d", len(rows))
 			for _, row := range rows {
-				s.devices[row.ID] = &device{ID: row.ID, LastSeen: row.Seen, IP: row.IP, RoomID: row.RoomID}
+				s.devices[row.ID] = &device{ID: row.ID, LastSeen: row.Seen, IP: row.IP, RoomID: row.RoomID, DeviceType: row.DeviceType}
 				if row.RoomID != "" && s.rooms[row.RoomID] != nil {
 					s.rooms[row.RoomID].Devices = append(s.rooms[row.RoomID].Devices, row.ID)
 				}
@@ -327,8 +341,8 @@ func splitIDs(v string) []string {
 	}
 	return strings.Split(v, ",")
 }
-func (s *sqliteStore) RegisterDevice(id, ip string) room {
-	r := s.memoryStore.RegisterDevice(id, ip)
+func (s *sqliteStore) RegisterDevice(id, ip string, deviceType ...string) room {
+	r := s.memoryStore.RegisterDevice(id, ip, deviceType...)
 	s.persistDevice(id)
 	return r
 }
@@ -359,11 +373,18 @@ func (s *sqliteStore) CreateRoom(name, creator string, invited []string) (room, 
 	return r, e
 }
 func (s *sqliteStore) CloseRoom(id string) error {
-	e := s.memoryStore.CloseRoom(id)
-	if e == nil {
-		_, _ = s.exec(fmt.Sprintf("UPDATE rooms SET status='closed' WHERE id=%s", sqliteString(id)))
+	s.mu.Lock()
+	r := s.rooms[id]
+	valid := r != nil && !r.Default && !r.Closed
+	s.mu.Unlock()
+	if !valid {
+		return errors.New("cannot close room")
 	}
-	return e
+	_, err := s.exec("BEGIN IMMEDIATE; UPDATE rooms SET status='closed' WHERE id=" + sqliteString(id) + "; UPDATE devices SET room_id='default' WHERE room_id=" + sqliteString(id) + "; COMMIT;")
+	if err != nil {
+		return err
+	}
+	return s.memoryStore.CloseRoom(id)
 }
 func (s *sqliteStore) ReturnDefault(id string) error {
 	e := s.memoryStore.ReturnDefault(id)
@@ -372,3 +393,116 @@ func (s *sqliteStore) ReturnDefault(id string) error {
 }
 
 var _ = sql.ErrNoRows
+
+func (s *memoryStore) UpdateRoom(id, name string, invited []string) (room, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.rooms[id]
+	if r == nil || r.Closed {
+		return room{}, errors.New("room not found")
+	}
+	if r.Default {
+		return room{}, errors.New("default room cannot be edited")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) > 80 {
+		return room{}, errors.New("name must contain 1-80 characters")
+	}
+	clean := []string{}
+	for _, id := range invited {
+		id = strings.TrimSpace(id)
+		if !validID.MatchString(id) {
+			return room{}, errors.New("invalid invited device id")
+		}
+		if !contains(clean, id) {
+			clean = append(clean, id)
+		}
+	}
+	r.Name = name
+	r.Invited = clean
+	return cloneRoom(r), nil
+}
+func (s *sqliteStore) UpdateRoom(id, name string, invited []string) (room, error) {
+	// Validate against a detached snapshot before modifying memory.
+	s.mu.Lock()
+	original := s.rooms[id]
+	old := cloneRoom(original)
+	s.mu.Unlock()
+	if original == nil {
+		return room{}, errors.New("room not found")
+	}
+	temp := newMemoryStore()
+	temp.rooms[id] = &old
+	r, e := temp.UpdateRoom(id, name, invited)
+	if e != nil {
+		return room{}, e
+	}
+	_, e = s.exec("UPDATE rooms SET name=" + sqliteString(r.Name) + ",invite_device_ids=" + sqliteString(strings.Join(r.Invited, ",")) + " WHERE id=" + sqliteString(id))
+	if e != nil {
+		return room{}, e
+	}
+	return s.memoryStore.UpdateRoom(id, r.Name, r.Invited)
+}
+
+func (s *memoryStore) DeleteSimulator(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d := s.devices[id]
+	if d == nil {
+		return nil
+	}
+	if d.DeviceType != "simulator" {
+		return errors.New("only simulator devices can be deleted")
+	}
+	delete(s.devices, id)
+	for _, r := range s.rooms {
+		r.Devices = remove(r.Devices, id)
+	}
+	return nil
+}
+func (s *sqliteStore) DeleteSimulator(id string) error {
+	s.mu.Lock()
+	d := s.devices[id]
+	if d == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	if d.DeviceType != "simulator" {
+		s.mu.Unlock()
+		return errors.New("only simulator devices can be deleted")
+	}
+	s.mu.Unlock()
+	if _, err := s.exec("DELETE FROM devices WHERE device_id=" + sqliteString(id) + " AND device_type='simulator'"); err != nil {
+		return err
+	}
+	return s.memoryStore.DeleteSimulator(id)
+}
+
+func (s *memoryStore) CreateSimulator(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !validID.MatchString(id) {
+		return errors.New("invalid device id")
+	}
+	if s.devices[id] != nil {
+		return errors.New("device id already exists")
+	}
+	s.devices[id] = &device{ID: id, DeviceType: "simulator", RoomID: "default"}
+	return nil
+}
+func (s *sqliteStore) CreateSimulator(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !validID.MatchString(id) {
+		return errors.New("invalid device id")
+	}
+	if s.devices[id] != nil {
+		return errors.New("device id already exists")
+	}
+	_, err := s.exec("INSERT INTO devices(device_id,last_seen_at,ip,room_id,device_type) VALUES(" + sqliteString(id) + ",'','','default','simulator')")
+	if err != nil {
+		return err
+	}
+	s.devices[id] = &device{ID: id, DeviceType: "simulator", RoomID: "default"}
+	return nil
+}
