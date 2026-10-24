@@ -253,7 +253,7 @@
 
 ### 5.3 二进制音频帧
 
-发送端在 `start` 后发送 WebSocket Binary 消息。每条 Binary 消息承载一帧原始 Opus 数据；服务端不解析浏览器模拟器的 PCM 测试数据。服务端按同房间且已 `receive_ready` 的连接转发，发送者不会收到自己的帧。
+发送端在 `start` 后发送 WebSocket Binary 消息。每条 Binary 消息承载一帧原始 Opus 数据；浏览器模拟器也使用 WebCodecs 编码后的原始 Opus 包。服务端按同房间且已 `receive_ready` 的连接转发，发送者不会收到自己的帧。
 
 ### 5.4 `end`
 
@@ -365,3 +365,52 @@
 服务端只返回默认房间、开放房间、本机创建或本机受邀房间，避免泄露其它受限房间加入码。响应最大 8192 字节，超出时返回 ok:false 和错误原因，不静默截断。请求控制帧仍限制 1024 字节。
 
 固件工具 `self.intercom.list_rooms` 通过独立工作任务查询，最多等待 5 秒，返回实际响应 JSON 或明确错误；不阻塞应用主任务。可说“当前有哪些对讲房间，加入码是什么”。默认房间通过 leave_room 返回，不使用空加入码加入。
+
+## 9. ASR 与临时聊天记录（服务端已实现）
+
+### 管理配置
+
+以下接口沿用管理员 Cookie 鉴权：
+
+- `GET /api/asr/config`：返回 `enabled`（boolean）、`url`（完整 HTTPS chat/completions 地址）、`model`（string）、`key_configured`（boolean），不返回密钥。
+- `PUT /api/asr/config`：JSON 字段 `enabled`、`url`、`model`、`api_key`、`clear_key`。Key 留空保留原值；clear_key=true 清除。默认模型 qwen3-asr-flash。启用需要 Key 和模型。成功返回 `{"ok":true}`；非法配置 400、保存失败 500。
+- `POST /api/asr/test`：正文为 WAV 二进制（最大 960044 字节），返回 `{"text":"喂喂。"}`；上传无效 400，上游失败 502；30 秒超时。
+
+URL 必须完整，例如 `https://<workspace>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions`。使用 Base64 WAV 内联上传，不需要公网录音 URL。指定 -db 后配置保存在 service_config 表；无 -db 时只保留在进程内。Key 不进入设备报文或接口响应。
+
+### 聊天能力协商
+
+hello 可增加 `chat_enabled:true`；默认为 false，旧固件不收到聊天事件。hello_ack 和成功房间切换响应增加 `chat_session_id`、`playback_token`，二者当前均为随机连接/房间视图令牌。重连或切房生成新令牌。
+
+### 记录事件
+
+协商后，同段参与者（包含发送者）收到 `chat_message`，识别完成收到 `chat_message_update`。字段：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| type | string | chat_message / chat_message_update |
+| chat_session_id | string | 接收设备当前视图标识 |
+| message_id | string | 服务端生成的唯一记录 ID |
+| room_id | string | 发言开始时固定的房间 |
+| source_id | string | 发送设备 ID |
+| created_at | string | UTC RFC3339 时间 |
+| duration_ms | integer | 帧数乘 60ms |
+| text | string | 最多 80 个 Unicode 字符，超长后加省略号 |
+| text_truncated | boolean | 是否被截断 |
+| asr_status | string | disabled / pending / completed / failed |
+| audio_available | boolean | 生成记录时音频是否可用；客户端还需处理回放 410 |
+| audio_path | string | 音频回放地址；指定 -public-base-url 时为完整 URL，否则为相对地址 |
+
+断线或切房后不推送旧视图识别结果。记录内存保存，重启清空；音频最长 30 分钟、全局 32MiB、新消息生成时每视图保留最近 20 条引用。淘汰后不补历史，回放返回 410。ASR 2 并发、有界队列、30 秒超时；失败不影响实时转发。调试 WAV 开关与本功能独立。
+
+### 回放
+
+`GET /api/intercom/messages/{message_id}/audio`，当前不做 token、管理员登录或参与者校验，直接 GET audio_path 即可下载。音频不存在或已失效返回 410。
+
+二进制格式均为小端：`AIR1`（4字节魔数）、uint32 采样率16000、uint16 声道1、uint16 帧时长60、uint32 包数；随后重复 uint32 包长加对应原始 Opus 包。禁止把各包直接拼接给解码器。响应 Content-Type 为 application/octet-stream，Cache-Control 为 no-store。
+
+控制台已增加“ASR 配置”tab。固件右侧气泡显示和回放尚未接入，需后续声明 chat_enabled 并处理这些事件。
+
+回放公网地址可配置为 `-public-base-url http://111.62.241.117:9200`，与本地监听地址独立。audio_path 不携带凭据，下载无需 Authorization 头。
+
+原始 Opus 位于内存 `server.chat.messages -> chatMessage.packets`，不写 .opus 文件；HTTP 请求时才封装 AIR1。`recordings/*.wav` 为独立调试录音；`playback_token` 字段暂保留但回放不使用。
