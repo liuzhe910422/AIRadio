@@ -46,7 +46,8 @@ type roomStore interface {
 	UpdateRoom(id, name string, invited []string) (room, error)
 	ListRooms() []room
 	RoomDevices(id string) []device
-	CloseRoom(id string) error
+	// CloseRoom returns the devices that were members when it closed.
+	CloseRoom(id string) ([]device, error)
 	ReturnDefault(id string) error
 	CreateSimulator(id string) error
 	DeleteSimulator(id string) error
@@ -92,6 +93,7 @@ func cloneRoom(r *room) room {
 	}
 	x := *r
 	x.Devices = append([]string(nil), r.Devices...)
+	x.Invited = append([]string(nil), r.Invited...)
 	return x
 }
 func (s *memoryStore) CurrentRoom(id string) room {
@@ -203,18 +205,33 @@ func (s *memoryStore) RoomDevices(id string) []device {
 	}
 	return out
 }
-func (s *memoryStore) CloseRoom(id string) error {
+func (s *memoryStore) CloseRoom(id string) ([]device, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.closableLocked(id); err != nil {
+		return nil, err
+	}
 	r := s.rooms[id]
-	if r == nil || r.Default {
-		return errors.New("cannot close default room")
+	members := []device{}
+	for did, d := range s.devices {
+		if s.currentLocked(did).ID == id {
+			members = append(members, *d)
+			d.RoomID = "default"
+		}
 	}
 	r.Closed = true
-	for _, d := range s.devices {
-		if d.RoomID == id {
-			d.RoomID = ""
-		}
+	r.Devices = nil
+	return members, nil
+}
+
+// Requires memoryStore.mu.
+func (s *memoryStore) closableLocked(id string) error {
+	r := s.rooms[id]
+	if r == nil {
+		return errors.New("room not found")
+	}
+	if r.Default {
+		return errors.New("cannot close default room")
 	}
 	return nil
 }
@@ -237,7 +254,9 @@ func (s *memoryStore) ListDevices() []device {
 }
 
 type sqliteStore struct {
-	path string
+	// Serialize each mutation with its persistence to preserve write order.
+	persistMu sync.Mutex
+	path      string
 	*memoryStore
 }
 
@@ -278,10 +297,14 @@ func (s *sqliteStore) exec(q string) ([]byte, error) {
 func sqliteString(v string) string { return "'" + strings.ReplaceAll(v, "'", "''") + "'" }
 
 func (s *sqliteStore) persistDevice(id string) {
-	d := s.devices[id]
-	if d == nil {
+	s.mu.Lock()
+	stored := s.devices[id]
+	if stored == nil {
+		s.mu.Unlock()
 		return
 	}
+	d := *stored
+	s.mu.Unlock()
 	q := fmt.Sprintf("INSERT INTO devices(device_id,last_seen_at,ip,room_id,device_type) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(device_id) DO UPDATE SET last_seen_at=excluded.last_seen_at,ip=excluded.ip,room_id=excluded.room_id,device_type=excluded.device_type", sqliteString(d.ID), sqliteString(d.LastSeen), sqliteString(d.IP), sqliteString(d.RoomID), sqliteString(d.DeviceType))
 	if _, err := s.exec(q); err != nil {
 		log.Printf("debug sqlite persist device=%s error=%v", id, err)
@@ -342,11 +365,15 @@ func splitIDs(v string) []string {
 	return strings.Split(v, ",")
 }
 func (s *sqliteStore) RegisterDevice(id, ip string, deviceType ...string) room {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	r := s.memoryStore.RegisterDevice(id, ip, deviceType...)
 	s.persistDevice(id)
 	return r
 }
 func (s *sqliteStore) Join(id, code string) (room, error) {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	r, e := s.memoryStore.Join(id, code)
 	if e == nil {
 		s.persistDevice(id)
@@ -354,11 +381,15 @@ func (s *sqliteStore) Join(id, code string) (room, error) {
 	return r, e
 }
 func (s *sqliteStore) Leave(id string) room {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	r := s.memoryStore.Leave(id)
 	s.persistDevice(id)
 	return r
 }
 func (s *sqliteStore) CreateRoom(name, creator string, invited []string) (room, error) {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	r, e := s.memoryStore.CreateRoom(name, creator, invited)
 	if e == nil {
 		q := fmt.Sprintf("INSERT INTO rooms(id,name,join_code,is_default,status,created_by,invite_device_ids) VALUES(%s,%s,%s,0,'active',%s,%s)", sqliteString(r.ID), sqliteString(r.Name), sqliteString(r.JoinCode), sqliteString(r.CreatedBy), sqliteString(strings.Join(r.Invited, ",")))
@@ -372,21 +403,25 @@ func (s *sqliteStore) CreateRoom(name, creator string, invited []string) (room, 
 	}
 	return r, e
 }
-func (s *sqliteStore) CloseRoom(id string) error {
+func (s *sqliteStore) CloseRoom(id string) ([]device, error) {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	s.mu.Lock()
-	r := s.rooms[id]
-	valid := r != nil && !r.Default && !r.Closed
+	err := s.closableLocked(id)
 	s.mu.Unlock()
-	if !valid {
-		return errors.New("cannot close room")
-	}
-	_, err := s.exec("BEGIN IMMEDIATE; UPDATE rooms SET status='closed' WHERE id=" + sqliteString(id) + "; UPDATE devices SET room_id='default' WHERE room_id=" + sqliteString(id) + "; COMMIT;")
 	if err != nil {
-		return err
+		return nil, err
+	}
+	// Commit room closure and membership together before changing memory.
+	_, err = s.exec("BEGIN IMMEDIATE; UPDATE rooms SET status='closed' WHERE id=" + sqliteString(id) + "; UPDATE devices SET room_id='default' WHERE room_id=" + sqliteString(id) + "; COMMIT;")
+	if err != nil {
+		return nil, err
 	}
 	return s.memoryStore.CloseRoom(id)
 }
 func (s *sqliteStore) ReturnDefault(id string) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	e := s.memoryStore.ReturnDefault(id)
 	s.persistDevice(id)
 	return e
@@ -423,6 +458,8 @@ func (s *memoryStore) UpdateRoom(id, name string, invited []string) (room, error
 	return cloneRoom(r), nil
 }
 func (s *sqliteStore) UpdateRoom(id, name string, invited []string) (room, error) {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	// Validate against a detached snapshot before modifying memory.
 	s.mu.Lock()
 	original := s.rooms[id]
@@ -461,6 +498,8 @@ func (s *memoryStore) DeleteSimulator(id string) error {
 	return nil
 }
 func (s *sqliteStore) DeleteSimulator(id string) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	s.mu.Lock()
 	d := s.devices[id]
 	if d == nil {
@@ -491,6 +530,8 @@ func (s *memoryStore) CreateSimulator(id string) error {
 	return nil
 }
 func (s *sqliteStore) CreateSimulator(id string) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !validID.MatchString(id) {

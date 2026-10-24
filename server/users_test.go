@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUsersCreateLoginReset(t *testing.T) {
@@ -62,7 +63,7 @@ func TestUsersCreateLoginReset(t *testing.T) {
 }
 func TestUserAPIRequiresLoginAndMasksPassword(t *testing.T) {
 	s := newServer()
-	a := &apiServer{s: s, sessions: map[string]bool{"test": true}}
+	a := &apiServer{s: s, sessions: map[string]time.Time{"test": time.Now().Add(time.Hour)}}
 	req := httptest.NewRequest("POST", "/api/users", strings.NewReader(`{"username":"bob","password":"password123"}`))
 	w := httptest.NewRecorder()
 	a.usersHandler(w, req)

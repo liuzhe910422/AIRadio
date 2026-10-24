@@ -4,10 +4,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestSessionCheck(t *testing.T) {
-	a := &apiServer{sessions: map[string]bool{"valid": true}}
+	a := &apiServer{sessions: map[string]time.Time{"valid": time.Now().Add(time.Hour)}}
 	for _, valid := range []bool{false, true} {
 		r := httptest.NewRequest("GET", "/api/session", nil)
 		if valid {

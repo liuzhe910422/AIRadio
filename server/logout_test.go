@@ -4,15 +4,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestLogoutRevokesOnlyCurrentSession(t *testing.T) {
-	a := &apiServer{sessions: map[string]bool{"current": true, "other": true}}
+	a := &apiServer{sessions: map[string]time.Time{"current": time.Now().Add(time.Hour), "other": time.Now().Add(time.Hour)}}
 	req := httptest.NewRequest("POST", "/api/logout", nil)
 	req.AddCookie(&http.Cookie{Name: "airadio_admin", Value: "current"})
 	w := httptest.NewRecorder()
 	a.logout(w, req)
-	if w.Code != 200 || a.sessions["current"] || !a.sessions["other"] {
+	if w.Code != 200 || !a.sessions["current"].IsZero() || a.sessions["other"].IsZero() {
 		t.Fatal("wrong session revoked")
 	}
 	cookies := w.Result().Cookies()

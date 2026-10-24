@@ -127,7 +127,7 @@ func (a *apiServer) usersHandler(w http.ResponseWriter, r *http.Request) {
 	// Password resets invalidate existing sessions; every user can log in again.
 	if reset {
 		a.mu.Lock()
-		a.sessions = map[string]bool{}
+		a.sessions = map[string]time.Time{}
 		a.mu.Unlock()
 	}
 	a.json(w, map[string]bool{"ok": true})

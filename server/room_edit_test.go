@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRoomEditAndClose(t *testing.T) {
@@ -33,7 +34,7 @@ func TestRoomEditAndClose(t *testing.T) {
 			if _, e = store.UpdateRoom("default", "bad", nil); e == nil {
 				t.Fatal("default edited")
 			}
-			if e = store.CloseRoom(r.ID); e != nil {
+			if _, e = store.CloseRoom(r.ID); e != nil {
 				t.Fatal(e)
 			}
 			if store.CurrentRoom("a").ID != "default" {
@@ -51,7 +52,7 @@ func TestRoomEditAndClose(t *testing.T) {
 func TestRoomEditAPI(t *testing.T) {
 	s := newServer()
 	r, _ := s.store.CreateRoom("old", "a", nil)
-	a := &apiServer{s: s, sessions: map[string]bool{"test": true}}
+	a := &apiServer{s: s, sessions: map[string]time.Time{"test": time.Now().Add(time.Hour)}}
 	req := httptest.NewRequest("PATCH", "/api/rooms/"+r.ID, strings.NewReader(`{"name":"edited","invite_device_ids":["b"]}`))
 	req.AddCookie(&http.Cookie{Name: "airadio_admin", Value: "test"})
 	w := httptest.NewRecorder()
