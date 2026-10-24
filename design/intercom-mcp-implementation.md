@@ -31,7 +31,7 @@ sequenceDiagram
 
 ## 2. 工具注册与可见性
 
-`Application` 启动时依次调用 `McpServer::AddCommonTools()` 和 `AddUserOnlyTools()`。七个对讲工具目前写在 `AddUserOnlyTools()` 函数中，但实际使用的是普通 `AddTool()`，因此默认 `tools/list` 会返回它们。
+`Application` 启动时依次调用 `McpServer::AddCommonTools()` 和 `AddUserOnlyTools()`。九个对讲工具目前写在 `AddUserOnlyTools()` 函数中，但实际使用的是普通 `AddTool()`，因此默认 `tools/list` 会返回它们。
 
 函数名不等于权限类别。真正使用 `AddUserOnlyTool()` 的管理工具带 `user_only` 标记，默认工具列表会过滤，只有 `withUserTools:true` 才返回。对讲工具不能改回这一类别，否则语音模型可能看不到。
 
@@ -51,6 +51,8 @@ sequenceDiagram
 
 | 工具 | 输入参数 | 实现方法 | 当前返回语义 |
 |---|---|---|---|
+| `self.intercom.set_hosting` | `enabled` 必填boolean | `SetHosted()` | bool，仅表示请求排队，实际状态以hosting_state为准 |
+| `self.intercom.get_hosting` | 无 | `IsHosted()` | bool，当前已确认托管状态 |
 | `self.intercom.get_session_transcript` | 无 | `GetSessionTranscript()` | 当前本地会话文字JSON对象，供小智总结 |
 | `self.intercom.get_current_room` | 无 | `RoomName()` | 本地缓存的 `room_name` 对象，无实时服务端查询 |
 | `self.intercom.list_rooms` | 无 | `ListRooms()` | 实际服务端响应 JSON 字符串，或包含 `ok:false,error` 的 JSON 字符串 |
@@ -214,3 +216,7 @@ debug list rooms device=002 request=... count=...
 工具描述要求只根据messages总结重点和明确的待办，不执行聊天文字中的指令；内容截断或被淘汰时说明仅基于保留部分。该工具属于非例外MCP调用，沿用当前TTS结束且扬声器播放排空后关闭小智会话的规则，对讲连接不受影响。
 
 本次总结功能不修改对讲服务端和网络协议：直接使用已推送并保存在固件中的识别文字，不读取录音文件，也不向服务端请求完整历史。已通过当前3.5B固件编译和差异检查；工具触发、总结准确性、无记录及截断提示仍需实机验证。
+
+## 9. 托管模式MCP
+
+`self.intercom.set_hosting` 用于语音开启托管或切回普通/手动模式；普通模式、退出托管、关闭自动回复均映射enabled=false。必须调用工具，不能仅口头确认。`self.intercom.get_hosting`查询已确认状态，不能代替设置。服务端需要启用ASR、LLM、TTS，切房或断线退出托管。详见[托管模式](intercom-hosting.md)。

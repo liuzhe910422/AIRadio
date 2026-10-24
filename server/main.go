@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -31,6 +32,7 @@ const (
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 type control struct {
+	Enabled         *bool         `json:"enabled,omitempty"`
 	ChatEnabled     bool          `json:"chat_enabled,omitempty"`
 	ChatSessionID   string        `json:"chat_session_id,omitempty"`
 	PlaybackToken   string        `json:"playback_token,omitempty"`
@@ -85,26 +87,31 @@ type outgoing struct {
 }
 
 type peer struct {
-	chatEnabled    bool
-	chatToken      string
-	chatTokenMu    sync.Mutex
-	chatRoom       string
-	chatPackets    [][]byte
-	chatRecipients []chatRecipient
-	id             string
-	conn           *websocket.Conn
-	out            chan outgoing
-	stop           chan struct{}
-	closeOnce      sync.Once
-	srv            *server
-	mu             sync.Mutex
-	receiving      string
-	ready          bool
-	sending        string
-	frames         int
-	bytes          int
-	recording      *wavRecording
-	roomID         string
+	hosted          atomic.Bool
+	hostingEpoch    atomic.Uint64
+	hostingBusy     bool
+	lastHostedReply time.Time
+	automatic       bool
+	chatEnabled     bool
+	chatToken       string
+	chatTokenMu     sync.Mutex
+	chatRoom        string
+	chatPackets     [][]byte
+	chatRecipients  []chatRecipient
+	id              string
+	conn            *websocket.Conn
+	out             chan outgoing
+	stop            chan struct{}
+	closeOnce       sync.Once
+	srv             *server
+	mu              sync.Mutex
+	receiving       string
+	ready           bool
+	sending         string
+	frames          int
+	bytes           int
+	recording       *wavRecording
+	roomID          string
 }
 
 func (p *peer) enqueue(kind int, data []byte) bool {
@@ -224,6 +231,13 @@ func (s *server) start(p *peer, c control) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.active != nil && s.active.automatic {
+		id := s.active.sending
+		for _, receiver := range s.peers {
+			receiver.send(control{Type: "abort", MessageID: id})
+		}
+		s.active = nil
+	}
 	if s.active != nil {
 		log.Printf("start rejected id=%s message=%s reason=busy active_id=%s", p.id, c.MessageID, s.active.id)
 		p.send(answer("start_ack", c.MessageID, false, "busy"))
@@ -448,6 +462,24 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch c.Type {
+		case "set_hosting":
+			s.mu.Lock()
+			if c.Enabled == nil || s.active == p {
+				p.send(answer("hosting_state", "", false, "invalid request or speaking"))
+			} else {
+				s.chat.mu.Lock()
+				ready := s.chat.hostingConfig.Enabled && s.chat.ttsConfig.Enabled && s.chat.config.Enabled
+				s.chat.mu.Unlock()
+				if *c.Enabled && !ready {
+					p.send(answer("hosting_state", "", false, "enable ASR, LLM and TTS first"))
+				} else {
+					p.hosted.Store(*c.Enabled)
+					p.hostingEpoch.Add(1)
+					p.send(control{Type: "hosting_state", OK: boolPtr(true), Enabled: boolPtr(p.hosted.Load())})
+				}
+			}
+			s.mu.Unlock()
+
 		case "list_rooms":
 			if c.RequestID == "" || len(c.RequestID) > 64 {
 				p.send(control{Type: "list_rooms_ack", RequestID: c.RequestID, OK: boolPtr(false), Error: "invalid request_id"})
@@ -609,10 +641,12 @@ func main() {
 	log.Printf("intercom listening on %s", *addr)
 	s.loadASRConfig()
 	s.loadTTSConfig()
+	s.loadHostingConfig()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go s.chat.run(ctx, s)
 	go s.chat.runTTS(ctx, s)
+	go s.chat.runHosting(ctx, s)
 	log.Fatal(http.ListenAndServe(*addr, httpHandler(s)))
 }
 

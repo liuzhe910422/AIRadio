@@ -131,6 +131,10 @@ func (a *apiServer) handler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("debug http request method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
 	log.Printf("debug http request method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
 	switch {
+	case r.URL.Path == "/api/hosting/test":
+		a.hostingTest(w, r)
+	case r.URL.Path == "/api/hosting/config":
+		a.hostingConfig(w, r)
 	case r.URL.Path == "/api/tts/config":
 		a.ttsConfig(w, r)
 	case r.URL.Path == "/api/tts/test":

@@ -123,7 +123,19 @@ bool Intercom::CanRecord() const {
          app_.GetAudioService().IsPlaybackIdle();
 }
 
+bool Intercom::SetHosted(bool enabled) {
+  if ((enabled && state_ != State::Ready) || record_task_active_ ||
+      state_ == State::Disconnected || state_ == State::Disabled ||
+      state_ == State::Connecting)
+    return false;
+  QueueText(enabled ? "{\"type\":\"set_hosting\",\"enabled\":true}"
+                    : "{\"type\":\"set_hosting\",\"enabled\":false}");
+  return true;
+}
+
 const char *Intercom::Status() const {
+  if (hosted_)
+    return "托管模式";
   switch (state_.load()) {
   case State::Disabled:
     return "对讲未配置";
@@ -248,6 +260,7 @@ void Intercom::ClearChatSession() {
   StopChatReplay();
   announcements_.clear();
   announced_ids_.clear();
+  hosted_ = false;
   chat_messages_.clear();
   chat_records_evicted_ = false;
   chat_session_.clear();
@@ -277,6 +290,8 @@ void Intercom::HandleChatEvent(const cJSON *json) {
     return;
   }
   IntercomChatMessage message;
+  message.automated =
+      cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "automated"));
   message.system = !stringField("event_kind").empty();
   bool announce =
       cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "announce"));
@@ -509,6 +524,10 @@ void Intercom::ResumeAssistantAudio() {
 }
 
 void Intercom::Press() {
+  if (hosted_) {
+    SetHosted(false);
+    return;
+  }
   if (state_ == State::Replaying)
     StopChatReplay();
   ESP_LOGI(kTag, "Record button: intercom_state=%d, device_state=%d",
@@ -897,6 +916,18 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
     ESP_LOGI(kTag,
              "Room invitation received: target=%s; current room unchanged",
              room_name->valuestring);
+  }
+  if (!strcmp(name, "hosting_state")) {
+    bool success = cJSON_IsTrue(ok);
+    bool enabled =
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "enabled"));
+    app_.Schedule([this, success, enabled]() {
+      if (success)
+        hosted_ = enabled;
+      Board::GetInstance().GetDisplay()->ShowNotification(
+          success ? (enabled ? "已开启托管" : "已退出托管")
+                  : "托管设置失败，请检查服务端配置");
+    });
   }
   if (!strcmp(name, "hello_ack"))
     hello_ok_ = cJSON_IsTrue(ok);

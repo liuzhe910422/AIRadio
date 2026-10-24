@@ -9,6 +9,7 @@ struct IntercomChatMessage {
   std::string status;
   std::string audio_url;
   int duration_ms = 0;
+  bool automated = false;
   bool system = false;
   bool own = false;
   bool available = false;

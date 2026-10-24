@@ -123,6 +123,28 @@ void McpServer::AddCommonTools() {
 
 void McpServer::AddUserOnlyTools() {
   auto &intercom = Application::GetInstance().GetIntercom();
+  AddTool("self.intercom.set_hosting",
+          "切换本机对讲的托管模式与普通模式（手动模式），这是设备控制操作，必须实际调用本工具，"
+          "不能只口头说已切换。用户说‘切换为普通模式’‘恢复普通模式’‘普通模式’"
+          "‘切回手动模式’‘退出托管’‘关闭托管’‘取消托管’‘关闭自动回复’‘我自己说话’时，"
+          "调用本工具并传enabled=false。用户说‘开启托管’‘进入托管模式’‘切换托管模式’"
+          "‘帮我自动回复对讲’‘无人值守’时，传enabled=true。"
+          "普通模式指本机手动对讲，不是修改助手的人设、聊天风格或回答模式。"
+          "调用无需加入码或房间名称，不要调用切换房间工具。"
+          "返回true仅表示请求已排队，实际切换以服务端hosting_state确认为准，不能据此宣称切换成功。"
+          "返回false时说明请求未发出，不要声称已切换。",
+          PropertyList({Property("enabled", kPropertyTypeBoolean)}),
+          [&intercom](const PropertyList &p) -> ReturnValue {
+            return intercom.SetHosted(p["enabled"].value<bool>());
+          });
+  AddTool("self.intercom.get_hosting",
+          "查询本机对讲当前是托管模式还是普通模式（手动模式）。"
+          "用户问‘现在什么模式’‘是不是普通模式’‘托管关了吗’‘是否正在自动回复’时调用。"
+          "返回true表示服务端已确认托管，false表示当前普通模式；不要凭聊天内容猜测模式。"
+          "需要切换模式时调用self.intercom.set_hosting，不能用本查询工具代替设置。",
+          PropertyList(), [&intercom](const PropertyList &) -> ReturnValue {
+            return intercom.IsHosted();
+          });
   AddTool("self.intercom.get_session_transcript",
           "获取当前对讲房间本次连接会话内保留的聊天文字，供你总结并语音播报。"
           "用户说‘总结一下聊天信息’‘总结聊天记录’‘刚才大家聊了什么’"
