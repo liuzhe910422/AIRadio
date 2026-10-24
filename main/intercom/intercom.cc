@@ -84,6 +84,7 @@ void Intercom::NetworkChanged(bool connected) {
   }
   network_ = connected;
   if (!connected) {
+    ClearChatSession();
     bool was_playing = state_ == State::Playing;
     stop_recording_ = true;
     cancel_recording_ = true;
@@ -112,7 +113,7 @@ void Intercom::NetworkChanged(bool connected) {
 bool Intercom::Busy() const {
   auto state = state_.load();
   return state == State::Recording || state == State::Sending ||
-         state == State::Playing;
+         state == State::Playing || state == State::Replaying;
 }
 
 bool Intercom::IsRecording() const { return state_ == State::Recording; }
@@ -144,6 +145,8 @@ const char *Intercom::Status() const {
     return "发送中";
   case State::Playing:
     return "说话中";
+  case State::Replaying:
+    return "语音回放中";
   }
   return "对讲不可用";
 }
@@ -195,12 +198,253 @@ bool Intercom::AcceptInvite(const std::string &code) {
                   "\"}");
 }
 
+void Intercom::ClearChatSession() {
+  StopChatReplay();
+  chat_messages_.clear();
+  chat_session_.clear();
+  ++chat_revision_;
+}
+
+void Intercom::HandleChatEvent(const cJSON *json) {
+  auto stringField = [json](const char *key) -> std::string {
+    auto value = cJSON_GetObjectItemCaseSensitive(json, key);
+    return cJSON_IsString(value) ? value->valuestring : "";
+  };
+  auto session = stringField("chat_session_id");
+  auto type = stringField("type");
+  if (type != "chat_message" && type != "chat_message_update") {
+    if (!session.empty() && session.size() <= 128 &&
+        (type == "hello_ack" || type == "room_state" ||
+         type == "join_room_ack" || type == "create_room_ack" ||
+         type == "accept_room_invite_ack") &&
+        !cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(json, "ok"))) {
+      app_.Schedule([this, session]() {
+        if (session != chat_session_) {
+          ClearChatSession();
+          chat_session_ = session;
+        }
+      });
+    }
+    return;
+  }
+  IntercomChatMessage message;
+  message.id = stringField("message_id");
+  message.source = stringField("source_id");
+  message.text = stringField("text");
+  message.status = stringField("asr_status");
+  message.audio_url = stringField("audio_path");
+  auto duration = cJSON_GetObjectItemCaseSensitive(json, "duration_ms");
+  if (!cJSON_IsNumber(duration) || duration->valuedouble < 0 ||
+      duration->valuedouble > 30000 || message.id.empty() ||
+      message.id.size() > 64 || session.empty() || session.size() > 128 ||
+      message.text.size() > 512 || message.source.size() > 32 ||
+      message.audio_url.size() > 2048)
+    return;
+  if (message.status != "pending" && message.status != "completed" &&
+      message.status != "failed" && message.status != "disabled")
+    return;
+  message.duration_ms = duration->valueint;
+  message.own = message.source == id_;
+  message.available =
+      cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "audio_available"));
+  // Support relative links when -public-base-url is not configured.
+  if (message.audio_url.rfind("/", 0) == 0) {
+    auto origin = url_;
+    auto end = origin.find('/', origin.find("://") + 3);
+    if (end != std::string::npos)
+      origin.resize(end);
+    if (origin.rfind("ws://", 0) == 0)
+      origin.replace(0, 5, "http://");
+    else if (origin.rfind("wss://", 0) == 0)
+      origin.replace(0, 6, "https://");
+    message.audio_url = origin + message.audio_url;
+  }
+  if (message.audio_url.rfind("http://", 0) != 0 &&
+      message.audio_url.rfind("https://", 0) != 0)
+    message.available = false;
+  app_.Schedule([this, session, message = std::move(message)]() mutable {
+    if (session != chat_session_)
+      return;
+    auto found =
+        std::find_if(chat_messages_.begin(), chat_messages_.end(),
+                     [&message](const auto &m) { return m.id == message.id; });
+    if (found != chat_messages_.end())
+      *found = std::move(message);
+    else {
+      if (chat_messages_.size() == 20) {
+        if (replay_message_ == chat_messages_.front().id)
+          StopChatReplay();
+        chat_messages_.erase(chat_messages_.begin());
+      }
+      chat_messages_.push_back(std::move(message));
+    }
+    ESP_LOGI(kTag, "Chat record updated: count=%u",
+             static_cast<unsigned>(chat_messages_.size()));
+    ++chat_revision_;
+  });
+}
+
+void Intercom::StopChatReplay() {
+  std::lock_guard<std::mutex> lock(replay_mutex_);
+  ++replay_generation_;
+  if (state_ == State::Replaying) {
+    app_.GetAudioService().ResetDecoder();
+    replay_message_.clear();
+    replay_download_done_ = false;
+    SetState(network_ && hello_ok_ ? State::Ready : State::Disconnected);
+    ResumeAssistantAudio();
+    ++chat_revision_;
+  }
+}
+
+void Intercom::PlayChatMessage(const std::string &id) {
+  if (state_ == State::Replaying) {
+    StopChatReplay();
+    return;
+  }
+  if (!CanRecord() || replay_task_active_) {
+    Board::GetInstance().GetDisplay()->ShowNotification("音频忙，请稍后再试");
+    return;
+  }
+  auto it = std::find_if(chat_messages_.begin(), chat_messages_.end(),
+                         [&id](const auto &m) { return m.id == id; });
+  if (it == chat_messages_.end() || !it->available)
+    return;
+  ESP_LOGI(kTag, "Chat replay requested: message=%s", id.c_str());
+  replay_message_ = id;
+  replay_download_done_ = false;
+  app_.GetAudioService().EnableWakeWordDetection(false);
+  app_.GetAudioService().ResetDecoder();
+  SetState(State::Replaying);
+  ++chat_revision_;
+  struct Work {
+    Intercom *self;
+    std::string url;
+    uint32_t generation;
+  };
+  auto work = new Work{this, it->audio_url, ++replay_generation_};
+  replay_task_active_ = true;
+  if (xTaskCreate(
+          [](void *arg) {
+            auto job = static_cast<Work *>(arg);
+            job->self->ReplayTask(std::move(job->url), job->generation);
+            delete job;
+            vTaskDelete(nullptr);
+          },
+          "intercom_replay", 8192, work, 3, nullptr) != pdPASS) {
+    delete work;
+    replay_task_active_ = false;
+    StopChatReplay();
+    Board::GetInstance().GetDisplay()->ShowNotification("无法启动语音回放");
+  }
+}
+
+void Intercom::ReplayTask(std::string url, uint32_t generation) {
+  auto http = Board::GetInstance().GetNetwork()->CreateHttp(4);
+  bool success = false;
+  std::string error = "语音下载失败";
+  const int64_t deadline = esp_timer_get_time() + 40 * 1000000LL;
+  auto cancelled = [&]() {
+    return replay_generation_ != generation || esp_timer_get_time() > deadline;
+  };
+  if (http) {
+    http->SetTimeout(3000);
+    http->SetKeepAlive(false);
+    auto readExact = [&](uint8_t *out, size_t count) {
+      size_t offset = 0;
+      while (offset < count && !cancelled()) {
+        auto got =
+            http->Read(reinterpret_cast<char *>(out + offset), count - offset);
+        if (!got || *got <= 0)
+          return false;
+        offset += *got;
+      }
+      return offset == count;
+    };
+    auto le32 = [](const uint8_t *b) {
+      return uint32_t(b[0]) | uint32_t(b[1]) << 8 | uint32_t(b[2]) << 16 |
+             uint32_t(b[3]) << 24;
+    };
+    if (!cancelled() && http->Open("GET", url)) {
+      auto status = http->GetStatusCode();
+      if (status && *status == 410)
+        error = "语音已过期";
+      uint8_t header[16];
+      if (status && *status == 200 && readExact(header, sizeof(header)) &&
+          memcmp(header, "AIR1", 4) == 0 && le32(header + 4) == 16000 &&
+          header[8] == 1 && header[9] == 0 && header[10] == 60 &&
+          header[11] == 0) {
+        uint32_t count = le32(header + 12);
+        success = count > 0 && count <= 500;
+        size_t bytes = 0;
+        for (uint32_t i = 0; success && i < count; ++i) {
+          uint8_t length[4];
+          if (!readExact(length, sizeof(length))) {
+            success = false;
+            break;
+          }
+          auto size = le32(length);
+          if (!size || size > 4096 || bytes + size > 512 * 1024) {
+            success = false;
+            break;
+          }
+          bytes += size;
+          auto packet = std::make_unique<AudioStreamPacket>();
+          packet->sample_rate = 16000;
+          packet->frame_duration = 60;
+          packet->payload.resize(size);
+          if (!readExact(packet->payload.data(), size)) {
+            success = false;
+            break;
+          }
+          bool queued = false;
+          while (!cancelled()) {
+            {
+              std::lock_guard<std::mutex> lock(replay_mutex_);
+              if (replay_generation_ != generation)
+                break;
+              queued =
+                  app_.GetAudioService().TryPushPacketToDecodeQueue(packet);
+            }
+            if (queued)
+              break;
+            vTaskDelay(pdMS_TO_TICKS(10));
+          }
+          if (!queued)
+            success = false;
+        }
+      }
+    }
+    http->Close();
+  }
+  replay_task_active_ = false;
+  app_.Schedule([this, generation, success, error]() {
+    if (replay_generation_ != generation || state_ != State::Replaying)
+      return;
+    ESP_LOGI(kTag, "Chat replay download finished: success=%d", success);
+    if (!success) {
+      if (error == "语音已过期") {
+        for (auto &m : chat_messages_)
+          if (m.id == replay_message_)
+            m.available = false;
+      }
+      StopChatReplay();
+      Board::GetInstance().GetDisplay()->ShowNotification(error);
+    } else {
+      replay_download_done_ = true;
+      PlaybackDrained();
+    }
+  });
+}
+
 void Intercom::ResumeAssistantAudio() {
   if (app_.GetDeviceState() == kDeviceStateIdle)
     app_.GetAudioService().EnableWakeWordDetection(true);
 }
 
 void Intercom::Press() {
+  if (state_ == State::Replaying)
+    StopChatReplay();
   ESP_LOGI(kTag, "Record button: intercom_state=%d, device_state=%d",
            static_cast<int>(state_.load()),
            static_cast<int>(app_.GetDeviceState()));
@@ -276,6 +520,8 @@ void Intercom::Cancel() {
 }
 
 void Intercom::Tick() {
+  if (state_ == State::Replaying)
+    PlaybackDrained();
   if (state_ == State::Recording &&
       esp_timer_get_time() - record_started_ >= 30 * 1000000LL) {
     stop_recording_ = true;
@@ -302,6 +548,9 @@ void Intercom::Tick() {
 }
 
 void Intercom::PlaybackDrained() {
+  if (state_ == State::Replaying && replay_download_done_ &&
+      app_.GetAudioService().IsPlaybackIdle())
+    StopChatReplay();
   if (state_ == State::Playing && incoming_id_.empty() &&
       playback_ended_at_.load() != 0 &&
       app_.GetAudioService().IsPlaybackIdle()) {
@@ -545,6 +794,7 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
   auto type = cJSON_GetObjectItem(json, "type");
   auto id = cJSON_GetObjectItem(json, "message_id");
   auto ok = cJSON_GetObjectItem(json, "ok");
+  HandleChatEvent(json);
   auto room_name = cJSON_GetObjectItem(json, "room_name");
   const char *name = cJSON_IsString(type) ? type->valuestring : "";
   const char *mid = cJSON_IsString(id) ? id->valuestring : "";
@@ -570,6 +820,15 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
   } else if (!strcmp(name, "end_ack") && message_id_ == mid)
     end_ok_ = cJSON_IsTrue(ok);
   else if (!strcmp(name, "start")) {
+    if (state_ == State::Replaying) {
+      std::string control(data, len);
+      cJSON_Delete(json);
+      app_.Schedule([this, control]() {
+        StopChatReplay();
+        OnData(control.data(), control.size(), false);
+      });
+      return;
+    }
     auto frame_ms = cJSON_GetObjectItem(json, "frame_ms");
     auto rate = cJSON_GetObjectItem(json, "sample_rate");
     if (strlen(mid) <= 64 && cJSON_IsNumber(frame_ms) &&
@@ -642,6 +901,7 @@ void Intercom::NetworkTask() {
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
     }
+    app_.Schedule([this]() { ClearChatSession(); });
     session_failed_ = false;
     SetState(State::Connecting);
     ESP_LOGI(kTag, "Connecting to intercom server");
@@ -654,7 +914,7 @@ void Intercom::NetworkTask() {
       if (ws_->Connect(url_.c_str())) {
         hello_ok_ = false;
         SendText("{\"type\":\"hello\",\"version\":1,\"device_id\":\"" + id_ +
-                 "\"}");
+                 "\",\"chat_enabled\":true}");
         for (int i = 0; i < 40 && !hello_ok_ && ws_->IsConnected(); ++i)
           vTaskDelay(pdMS_TO_TICKS(50));
         if (hello_ok_) {
@@ -675,6 +935,7 @@ void Intercom::NetworkTask() {
       ws_->Close();
       ws_.reset();
     }
+    app_.Schedule([this]() { ClearChatSession(); });
     ESP_LOGW(kTag, "Intercom connection ended: hello_ok=%d, failed=%d",
              hello_ok_.load(), session_failed_.load());
     if (state_ == State::Playing) {
