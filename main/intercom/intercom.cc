@@ -163,6 +163,16 @@ const char *Intercom::Status() const {
   return "对讲不可用";
 }
 
+std::string Intercom::SpeakingDeviceId() {
+  const auto state = state_.load();
+  if (state == State::Recording)
+    return id_;
+  if (state != State::Playing)
+    return {};
+  std::lock_guard<std::mutex> lock(incoming_mutex_);
+  return incoming_source_id_;
+}
+
 void Intercom::SetState(State state) { state_ = state; }
 
 std::string Intercom::ListRooms() {
@@ -172,6 +182,7 @@ std::string Intercom::ListRooms() {
   if (state_ == State::Disabled || state_ == State::Disconnected ||
       state_ == State::Connecting)
     return "{\"ok\":false,\"error\":\"intercom disconnected\"}";
+  const auto generation = room_picker_generation_.load();
   rooms_request_id_ = std::to_string(esp_random());
   rooms_response_.clear();
   QueueText("{\"type\":\"list_rooms\",\"request_id\":\"" + rooms_request_id_ +
@@ -180,8 +191,95 @@ std::string Intercom::ListRooms() {
     return !rooms_response_.empty();
   });
   rooms_request_id_.clear();
-  return received ? rooms_response_
-                  : "{\"ok\":false,\"error\":\"room query timed out\"}";
+  std::string response =
+      received ? rooms_response_
+               : "{\"ok\":false,\"error\":\"room query timed out\"}";
+  lock.unlock();
+  app_.Schedule(
+      [this, response, generation]() { ShowRoomPicker(response, generation); });
+  return response;
+}
+
+int Intercom::RoomPickerSeconds() const {
+  return static_cast<int>(std::max<int64_t>(
+      0, (room_picker_deadline_ - esp_timer_get_time() + 999999) / 1000000));
+}
+
+void Intercom::CloseRoomPicker() {
+  room_picker_visible_ = false;
+  room_picker_pending_.clear();
+  room_picker_error_.clear();
+  room_options_.clear();
+  ++room_picker_revision_;
+}
+
+void Intercom::ShowRoomPicker(const std::string &response,
+                              uint32_t generation) {
+  if (generation != room_picker_generation_ || !network_ ||
+      state_ == State::Disconnected || state_ == State::Connecting ||
+      state_ == State::Disabled || RoomPickerPending())
+    return;
+  cJSON *json = cJSON_Parse(response.c_str());
+  if (!json)
+    return;
+  auto rooms = cJSON_GetObjectItem(json, "rooms");
+  if (!cJSON_IsTrue(cJSON_GetObjectItem(json, "ok")) || !cJSON_IsArray(rooms)) {
+    Board::GetInstance().GetDisplay()->ShowNotification("房间查询失败");
+    cJSON_Delete(json);
+    return;
+  }
+  CloseRoomPicker();
+  cJSON *item = nullptr;
+  cJSON_ArrayForEach(item, rooms) {
+    auto id = cJSON_GetObjectItem(item, "room_id");
+    auto name = cJSON_GetObjectItem(item, "room_name");
+    auto code = cJSON_GetObjectItem(item, "code");
+    const bool is_default =
+        cJSON_IsTrue(cJSON_GetObjectItem(item, "is_default"));
+    if (!cJSON_IsString(id) || !cJSON_IsString(name) ||
+        !cJSON_IsTrue(cJSON_GetObjectItem(item, "can_join")))
+      continue;
+    if (!is_default &&
+        (!cJSON_IsString(code) || strlen(code->valuestring) != 6 ||
+         strspn(code->valuestring, "0123456789") != 6))
+      continue;
+    room_options_.push_back(
+        {id->valuestring, name->valuestring,
+         cJSON_IsString(code) ? code->valuestring : "",
+         cJSON_IsTrue(cJSON_GetObjectItem(item, "is_current")) != 0,
+         is_default});
+  }
+  cJSON_Delete(json);
+  if (room_options_.empty()) {
+    Board::GetInstance().GetDisplay()->ShowNotification("暂无可加入房间");
+    return;
+  }
+  room_picker_visible_ = true;
+  room_picker_deadline_ = esp_timer_get_time() + 15 * 1000000LL;
+}
+
+void Intercom::SelectRoom(const std::string &id) {
+  if (!room_picker_visible_ || RoomPickerPending())
+    return;
+  if (!network_ || state_ != State::Ready) {
+    room_picker_error_ = "对讲忙，请稍后操作";
+    return;
+  }
+  for (const auto &room : room_options_) {
+    if (room.id != id)
+      continue;
+    if (room.current) {
+      CloseRoomPicker();
+      return;
+    }
+    room_picker_pending_ = room.id;
+    room_picker_error_.clear();
+    room_picker_deadline_ = esp_timer_get_time() + 5 * 1000000LL;
+    QueueText(room.is_default
+                  ? "{\"type\":\"leave_room\"}"
+                  : "{\"type\":\"join_room\",\"code\":\"" + room.code + "\"}");
+    return;
+  }
 }
 
 bool Intercom::CreateRoom(const std::string &name,
@@ -257,6 +355,8 @@ cJSON *Intercom::GetSessionTranscript() const {
 }
 
 void Intercom::ClearChatSession() {
+  ++room_picker_generation_;
+  CloseRoomPicker();
   StopChatReplay();
   announcements_.clear();
   announced_ids_.clear();
@@ -605,6 +705,15 @@ void Intercom::Cancel() {
 }
 
 void Intercom::Tick() {
+  if (room_picker_visible_ && esp_timer_get_time() >= room_picker_deadline_) {
+    if (RoomPickerPending()) {
+      CloseRoomPicker();
+      Board::GetInstance().GetDisplay()->ShowNotification(
+          "未收到切换确认，请重新查询房间");
+    } else {
+      CloseRoomPicker();
+    }
+  }
   if (CanRecord() && !replay_task_active_ && !announcements_.empty()) {
     auto id = announcements_.front();
     announcements_.pop_front();
@@ -917,6 +1026,25 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
              "Room invitation received: target=%s; current room unchanged",
              room_name->valuestring);
   }
+  if (!strcmp(name, "join_room_ack") || !strcmp(name, "room_state")) {
+    auto room = cJSON_GetObjectItem(json, "room_id");
+    const std::string room_id = cJSON_IsString(room) ? room->valuestring : "";
+    const bool failed = cJSON_IsFalse(ok);
+    const auto generation = room_picker_generation_.load();
+    app_.Schedule([this, room_id, failed, generation]() {
+      if (generation != room_picker_generation_)
+        return;
+      if (!RoomPickerPending())
+        return;
+      if (!failed && room_id == room_picker_pending_) {
+        CloseRoomPicker();
+      } else if (failed) {
+        room_picker_pending_.clear();
+        room_picker_error_ = "切换失败，请重试";
+        room_picker_deadline_ = esp_timer_get_time() + 15 * 1000000LL;
+      }
+    });
+  }
   if (!strcmp(name, "hosting_state")) {
     bool success = cJSON_IsTrue(ok);
     bool enabled =
@@ -953,6 +1081,14 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
         frame_ms->valueint == kFrameMs && cJSON_IsNumber(rate) &&
         rate->valueint == kSampleRate && CanRecord()) {
       incoming_id_ = mid;
+      {
+        auto source = cJSON_GetObjectItem(json, "source_id");
+        std::lock_guard<std::mutex> lock(incoming_mutex_);
+        incoming_source_id_ =
+            cJSON_IsString(source) && strlen(source->valuestring) <= 32
+                ? source->valuestring
+                : "";
+      }
       incoming_frames_ = 0;
       incoming_buffer_target_ = kJitterFrames;
       incoming_playback_started_ = false;

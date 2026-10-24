@@ -60,8 +60,10 @@ void CustomLcdDisplay::SetupUI() {
   lv_obj_set_style_bg_color(intercom_bar_, lv_color_hex(0xF4F7F6), 0);
   lv_obj_set_style_pad_all(intercom_bar_, 8, 0);
   device_status_label_ = lv_label_create(intercom_bar_);
-  lv_label_set_text(device_status_label_, "设备状态\nWi-Fi · 小智");
+  lv_label_set_text(device_status_label_, "设备：未配置");
   lv_obj_set_width(device_status_label_, 164);
+  lv_label_set_long_mode(device_status_label_, LV_LABEL_LONG_DOT);
+  lv_obj_set_height(device_status_label_, 40);
   lv_obj_align(device_status_label_, LV_ALIGN_TOP_LEFT, 0, 4);
   intercom_status_label_ = lv_label_create(intercom_bar_);
   lv_label_set_text(intercom_status_label_, "对讲状态\n房间：默认房间");
@@ -100,18 +102,125 @@ void CustomLcdDisplay::UpdateIntercom() {
   lv_obj_set_style_bg_color(intercom_button_,lv_color_hex(intercom.IsHosted()?0xE6B83D:0x3187C8),0);
   lv_obj_set_style_text_color(intercom_button_,intercom.IsHosted()?lv_color_hex(0x302600):lv_color_white(),0);
   if (intercom_status_label_) {
-    std::string text = "对讲状态\n房间：" + std::string(intercom.RoomName()) +
-                       "\n" + intercom.Status();
+    const auto speaker = intercom.SpeakingDeviceId();
+    const std::string status =
+        speaker.empty() ? intercom.Status() : "说话中：" + speaker;
+    std::string text =
+        "对讲状态\n房间：" + std::string(intercom.RoomName()) + "\n" + status;
     lv_label_set_text(intercom_status_label_, text.c_str());
   }
-  if (device_status_label_)
-    lv_label_set_text(device_status_label_, "设备状态\nWi-Fi · 小智");
+  if (device_status_label_) {
+    const char *device_id = intercom.DeviceId();
+    lv_label_set_text_fmt(device_status_label_, "设备：%s",
+                          device_id[0] ? device_id : "未配置");
+  }
   if (intercom.IsHosted() || intercom.CanRecord() || intercom.IsRecording())
     lv_obj_remove_state(intercom_button_, LV_STATE_DISABLED);
   else
     lv_obj_add_state(intercom_button_, LV_STATE_DISABLED);
   UpdateChatRecords();
+  UpdateRoomPicker();
   Unlock();
+}
+
+void CustomLcdDisplay::UpdateRoomPicker() {
+  auto &intercom = Application::GetInstance().GetIntercom();
+  if (!intercom.RoomPickerVisible()) {
+    if (room_picker_)
+      lv_obj_delete(room_picker_);
+    room_picker_ = room_picker_title_ = room_picker_list_ = nullptr;
+    return;
+  }
+  if (!room_picker_ || room_picker_revision_ != intercom.RoomPickerRevision()) {
+    if (room_picker_)
+      lv_obj_delete(room_picker_);
+    room_picker_revision_ = intercom.RoomPickerRevision();
+    room_picker_ = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(room_picker_, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(room_picker_, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(room_picker_, LV_OPA_50, 0);
+    lv_obj_set_style_border_width(room_picker_, 0, 0);
+    lv_obj_set_style_pad_all(room_picker_, 0, 0);
+    lv_obj_set_style_radius(room_picker_, 0, 0);
+    lv_obj_remove_flag(room_picker_, LV_OBJ_FLAG_SCROLLABLE);
+    auto panel = lv_obj_create(room_picker_);
+    lv_obj_set_size(panel, 420, 280);
+    lv_obj_set_style_pad_all(panel, 12, 0);
+    lv_obj_center(panel);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0xF4F7F6), 0);
+    lv_obj_set_style_text_color(panel, lv_color_hex(0x17332D), 0);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    room_picker_title_ = lv_label_create(panel);
+    lv_obj_set_width(room_picker_title_, 300);
+    lv_label_set_long_mode(room_picker_title_, LV_LABEL_LONG_DOT);
+    lv_obj_align(room_picker_title_, LV_ALIGN_TOP_LEFT, 0, 8);
+    auto close = lv_button_create(panel);
+    lv_obj_set_size(close, 48, 40);
+    lv_obj_align(close, LV_ALIGN_TOP_RIGHT, 0, 0);
+    auto close_label = lv_label_create(close);
+    lv_label_set_text(close_label, "X");
+    lv_obj_center(close_label);
+    lv_obj_add_event_cb(
+        close,
+        [](lv_event_t *) {
+          auto &app = Application::GetInstance();
+          app.Schedule([&app]() { app.GetIntercom().CloseRoomPicker(); });
+        },
+        LV_EVENT_CLICKED, nullptr);
+    room_picker_list_ = lv_obj_create(panel);
+    lv_obj_set_size(room_picker_list_, 388, 200);
+    lv_obj_align(room_picker_list_, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_flex_flow(room_picker_list_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(room_picker_list_, LV_DIR_VER);
+    for (const auto &room : intercom.RoomOptions()) {
+      auto button = lv_button_create(room_picker_list_);
+      lv_obj_set_size(button, LV_PCT(100), LV_SIZE_CONTENT);
+      lv_obj_set_style_min_height(button, 44, 0);
+      lv_obj_set_style_bg_color(
+          button, lv_color_hex(room.current ? 0xCDEAD9 : 0xDFEAF5), 0);
+      lv_obj_set_style_text_color(button, lv_color_hex(0x17332D), 0);
+      auto label = lv_label_create(button);
+      lv_obj_set_width(label, LV_PCT(100));
+      lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+      const std::string text =
+          room.code.empty() ? room.name
+                            : room.name + "（加入码：" + room.code + "）";
+      lv_label_set_text(label, text.c_str());
+      auto id = new std::string(room.id);
+      lv_obj_add_event_cb(
+          button,
+          [](lv_event_t *event) {
+            auto id = static_cast<std::string *>(lv_event_get_user_data(event));
+            if (lv_event_get_code(event) == LV_EVENT_DELETE) {
+              delete id;
+            } else if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+              auto &app = Application::GetInstance();
+              app.Schedule(
+                  [id = *id, &app]() { app.GetIntercom().SelectRoom(id); });
+            }
+          },
+          LV_EVENT_ALL, id);
+    }
+  }
+  if (intercom.RoomPickerPending()) {
+    lv_label_set_text_fmt(room_picker_title_, "正在切换… %d秒",
+                          intercom.RoomPickerSeconds());
+  } else if (!intercom.RoomPickerError().empty()) {
+    lv_label_set_text_fmt(room_picker_title_, "%s · %d秒",
+                          intercom.RoomPickerError().c_str(),
+                          intercom.RoomPickerSeconds());
+  } else {
+    lv_label_set_text_fmt(room_picker_title_, "选择房间 · %d秒",
+                          intercom.RoomPickerSeconds());
+  }
+  const auto count = lv_obj_get_child_count(room_picker_list_);
+  for (uint32_t i = 0; i < count; ++i) {
+    auto button = lv_obj_get_child(room_picker_list_, i);
+    if (intercom.RoomPickerPending())
+      lv_obj_add_state(button, LV_STATE_DISABLED);
+    else
+      lv_obj_remove_state(button, LV_STATE_DISABLED);
+  }
 }
 
 void CustomLcdDisplay::SetChatMessage(const char *role, const char *content) {

@@ -1,6 +1,6 @@
 # 灵矽对讲服务协议
 
-状态：当前服务端实现协议（第二版房间与浏览器模拟器）。
+状态：当前服务端实现协议，包含房间、浏览器模拟器、会话记录、托管及动态控制台用户；核对日期 2026-10-24。
 
 本文以 `server/api.go`、`server/main.go` 和内置 Web 页面为准，集中描述 HTTP 和 WebSocket 接口。服务默认使用明文 HTTP/WebSocket，仅适合可信内网测试。
 
@@ -8,7 +8,7 @@
 
 - HTTP 基础地址由启动参数 `-listen` 决定，例如 `http://127.0.0.1:9200`。
 - WebSocket 地址为 `ws://host:port/ws`；HTTPS 页面对应 `wss://`。
-- 管理 HTTP 接口需要 Cookie `airadio_admin`。登录成功后服务端设置该 Cookie。
+- 管理 HTTP 接口需要 Cookie `airadio_admin`。登录成功后服务端设置该 Cookie。每次登录创建独立随机会话，有效期12小时，最多128个会话；达到上限返回429。Cookie 使用 Path=/、HttpOnly、SameSite=Strict，直接 HTTPS 请求下启用 Secure。
 - JSON 使用 UTF-8。成功响应通常为 JSON；失败响应为 HTTP 状态码和纯文本错误正文。
 - `device_id` 必须匹配 `[A-Za-z0-9_-]{1,32}`，且在线连接不能重复。
 - 默认房间 ID 为 `default`，名称为“默认房间”，不能关闭。
@@ -46,7 +46,9 @@
 | `name` | string | 房间名称 |
 | `join_code` / `JoinCode` | string | 普通房间六位数字加入码；默认房间为空 |
 | `is_default` / `Default` | boolean | 是否默认房间 |
-| `device_ids` / `Devices` | string[] | 当前房间设备 ID |
+| `device_ids` / `Devices` | string[] | 存储维护的实际成员；默认房间成员请通过设备接口按 room_id 查询 |
+| `invite_device_ids` | string[] | 邀请名单，空表示开放加入 |
+| `created_by_device_id` | string | 创建者设备 ID |
 
 ### 2.3 `POST /api/rooms`
 
@@ -58,9 +60,9 @@
 |---|---|---:|---|
 | `name` | string | 是 | 去除首尾空格后不能为空 |
 | `created_by_device_id` | string | 否 | 创建者标识，记录到房间 |
-| `device_ids` | string[] | 否 | 要加入房间的设备；为空时加入当前已注册设备快照 |
+| `device_ids` | string[] | 否 | 邀请设备列表；为空表示开放加入，不自动移动受邀设备 |
 
-成功：`200`，返回单个房间对象（字段同 `GET /api/rooms`）。普通房间会生成固定六位加入码。
+成功：`200`，返回单个房间对象（字段同 `GET /api/rooms`）。普通房间会生成固定六位加入码。指定的创建者自动加入；邀请不自动切换受邀设备。HTTP 创建当前读取 device_ids；WebSocket 创建优先读取 invite_device_ids。
 
 失败：`400`，正文为 `name is required` 等错误。
 
@@ -74,7 +76,7 @@
 |---|---|---|
 | `device_id` | string | 设备 ID |
 | `last_seen_at` | string | 最近注册时间，RFC3339 |
-| `last_ip` | string | 最近 IP；当前 WebSocket 注册未填充真实 IP |
+| `last_ip` | string | 最近 hello 的 RemoteAddr，可能含端口；经过代理时可能为代理地址 |
 | `online` | boolean | 当前是否存在在线 WebSocket |
 | `room_id` | string | 当前逻辑房间 ID |
 
@@ -92,7 +94,7 @@
 
 ### 2.6 `GET /api/devices`
 
-返回所有曾注册设备。需要登录。响应为设备对象数组，字段同上。
+返回已保存设备，包含管理端创建但尚未连接的离线模拟设备。需要登录。响应为设备对象数组，字段同上。
 
 ### 2.7 静态页面
 
@@ -162,15 +164,15 @@
 客户端 -> 服务端：
 
 ```json
-{"type":"create_room","name":"房间002","device_ids":["003"]}
+{"type":"create_room","name":"房间002","invite_device_ids":["004"]}
 ```
 
-设备模拟器必须传自己的 ID；这样只有当前设备进入新房间。管理端 HTTP 创建时 `device_ids` 为空则表示加入全部当前已注册设备。
+创建者取已注册 WebSocket 的身份，不信任请求中的 creator_device_id。推荐传 invite_device_ids；兼容旧字段 device_ids 作为邀请名单。只有创建者自动加入，受邀设备须自行接受；空名单表示开放加入。
 
 成功：
 
 ```json
-{"type":"create_room_ack","ok":true,"room_id":"room-...","room_name":"房间002","code":"111696","device_ids":["003"]}
+{"type":"create_room_ack","ok":true,"room_id":"room-...","room_name":"房间002","code":"111696","device_ids":["003"],"invite_device_ids":["004"]}
 ```
 
 创建者自动进入新房间。服务端会向受影响的在线设备发送 `room_state`。
@@ -249,11 +251,11 @@
 {"type":"busy","message_id":"003-1"}
 ```
 
-服务端只在约 2 秒准备窗口内接受 `receive_ready`。未准备好的接收者不会收到音频。
+服务端发送 start 时默认将接收者设为可接收，立即转发，不等待 receive_ready。接收端仍可发送 receive_ready；该确认只在约2秒窗口内有效。busy 或窗口外确认会取消该接收者本段接收资格。
 
 ### 5.3 二进制音频帧
 
-发送端在 `start` 后发送 WebSocket Binary 消息。每条 Binary 消息承载一帧原始 Opus 数据；浏览器模拟器也使用 WebCodecs 编码后的原始 Opus 包。服务端按同房间且已 `receive_ready` 的连接转发，发送者不会收到自己的帧。
+发送端在 `start` 后发送 WebSocket Binary 消息。每条 Binary 消息承载一帧原始 Opus 数据；浏览器模拟器也使用 WebCodecs 编码后的原始 Opus 包。服务端按同房间且仍可接收本段的连接转发，发送者不会收到自己的帧。
 
 ### 5.4 `end`
 
@@ -304,9 +306,9 @@
 ## 6. 典型流程
 
 1. 建立 `/ws`，发送 `hello`，等待 `hello_ack`。
-2. 发送 `join_room` 或 `create_room`，等待对应 ack；创建设备房间时传 `device_ids:[自身 ID]`。
+2. 发送 `join_room` 或 `create_room`，等待对应 ack；创建房间时用 invite_device_ids 指定邀请名单，创建者由连接身份确定。
 3. 发言方发送 `start`；服务端向同房间设备发送 start，并向发言方返回 start_ack。
-4. 接收方发送 `receive_ready`。
+4. 接收方可发送 receive_ready；服务端已默认开始转发，设备忙时发送 busy 拒绝。
 5. 发言方逐帧发送 Binary Opus。
 6. 发言方发送 `end`；服务端向接收方发送 end，并返回 end_ack。
 7. 连接断开时，旧会话失效，不支持续传或离线补播。
@@ -327,7 +329,7 @@
 {"type":"accept_room_invite","code":"123456"}
 ```
 
-成功返回 `accept_room_invite_ack`，随后发送 `room_state`。`room_state` 只表示该设备当前活动房间发生切换，不表示房间属性更新。
+成功返回 `accept_room_invite_ack`，随后发送 `room_state`。`room_state` 也用于通知房间名称编辑；仅名称更新不重置聊天视图。实际切换时携带新的 chat_session_id。
 
 ## 8. WebSocket 房间列表查询
 
@@ -364,7 +366,7 @@
 
 服务端只返回默认房间、开放房间、本机创建或本机受邀房间，避免泄露其它受限房间加入码。响应最大 8192 字节，超出时返回 ok:false 和错误原因，不静默截断。请求控制帧仍限制 1024 字节。
 
-固件工具 `self.intercom.list_rooms` 通过独立工作任务查询，最多等待 5 秒，返回实际响应 JSON 或明确错误；不阻塞应用主任务。可说“当前有哪些对讲房间，加入码是什么”。默认房间通过 leave_room 返回，不使用空加入码加入。
+固件工具 `self.intercom.list_rooms` 通过独立工作任务查询，最多等待 5 秒，返回实际响应 JSON 或明确错误；不阻塞应用主任务。3.5B会同时使用成功响应显示15秒选房弹窗，名称后附加入码；点击复用join_room／leave_room，等待现有确认消息。此交互不改变MCP参数、返回格式或WebSocket报文。可说“当前有哪些对讲房间，加入码是什么”。默认房间通过 leave_room 返回，不使用空加入码加入。
 
 ## 9. ASR 与临时聊天记录（服务端已实现）
 
@@ -456,7 +458,7 @@ GET/PUT /api/hosting/config和POST /api/hosting/test沿用管理员登录。模�
 
 修改邀请范围不移动设备，不自动移除已有成员；仅向新增受邀在线设备发送room_invite和系统记录。名称变化向当前在线成员发送room_state，不重置聊天session。设备列表通过GET /api/devices获取，以room_id统计实际成员和online状态。
 
-删除按钮使用POST /api/rooms/{id}/close软关闭房间。默认房间不可关闭；房间正在发言时返回409，待结束后重试。关闭后设备归属持久化为默认房间，在线设备收到带新chat_session_id的room_state，清空旧记录并退出托管；加入码失效。控制台编辑弹窗每5秒更新设备在线状态。
+删除按钮使用POST /api/rooms/{id}/close软关闭房间。默认房间不可关闭；关闭时若该房间正在发言，服务端中止音频，向真人发送者报告 room closed，并向接收者发送 abort。关闭后设备归属持久化为默认房间，在线设备收到带新chat_session_id的room_state，清空旧记录并退出托管；加入码失效。控制台编辑弹窗每5秒更新设备在线状态。
 
 编辑弹窗仅列出room_id等于当前房间的设备（含离线成员），无成员时显示空状态。未展示设备的原有邀请设置在保存时保留；开放加入开关启用时仍按空邀请列表保存。
 
@@ -466,9 +468,9 @@ GET/PUT /api/hosting/config和POST /api/hosting/test沿用管理员登录。模�
 
 - GET /api/users：需登录，返回username、created_at数组，不返回密码或摘要。
 - POST /api/users：需登录，JSON包含username和password；用户名为1～32位ASCII字母、数字、下划线或短横线，密码6～128字节。成功返回ok:true，重复用户名或非法参数返回400。
-- PUT /api/users/{username}/password：需登录，JSON包含password，重置指定用户密码；成功后清除当前进程全部登录会话，用户需要重新登录。
+- PUT /api/users/{username}/password：需登录，JSON包含password，重置指定用户密码；成功后清除当前进程全部登录会话（包括其他用户的会话），用户需要重新登录。用户不存在或密码非法返回400；不需要提供原密码。
 
-SQLite users表保存username主键、password_hash和created_at。密码使用PBKDF2-HMAC-SHA256（100000次、随机salt）摘要存储，不保存明文。admin表仅用于旧账号迁移，迁移后修改用户密码不会被旧表覆盖。每次登录生成独立随机Cookie会话，HttpOnly及SameSite=Lax。当前不提供删除用户、角色权限或公开注册接口。
+SQLite users表保存username主键、password_hash和created_at。密码使用PBKDF2-HMAC-SHA256（100000次、随机salt）摘要存储，不保存明文。admin表仅用于旧账号迁移，迁移后修改用户密码不会被旧表覆盖。每次登录生成独立随机Cookie会话，有效期12小时，HttpOnly及SameSite=Strict；直接HTTPS请求启用Secure。当前不提供删除用户、角色权限或公开注册接口。
 
 控制台“用户管理”tab提供创建用户、用户列表和重置密码；密码字段不预填。新账号可直接登录使用全部功能。
 
