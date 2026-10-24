@@ -424,6 +424,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	ack.RoomID, ack.RoomName = current.ID, current.Name
 	ack.ChatSessionID, ack.PlaybackToken = p.playbackToken(), p.playbackToken()
 	p.send(ack)
+	s.roomOnline(p, current)
 	for {
 		kind, data, err = conn.ReadMessage()
 		if err != nil {
@@ -469,6 +470,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				p.send(answer("join_room_ack", "", false, "busy"))
 				break
 			}
+			oldRoom := s.store.CurrentRoom(p.id).ID
 			r, err := s.store.Join(p.id, c.Code)
 			if err != nil {
 				log.Printf("debug room join failed device=%s code=%s error=%v", p.id, c.Code, err)
@@ -477,6 +479,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				log.Printf("debug room joined device=%s room=%s name=%s", p.id, r.ID, r.Name)
 				s.resetChatView(p)
 				p.send(control{Type: "join_room_ack", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name})
+				s.roomJoined(p, r, oldRoom)
 			}
 		case "create_room":
 			invited := c.InviteDeviceIDs
@@ -496,11 +499,8 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				log.Printf("debug room created device=%s room=%s name=%s code=%s devices=%v", p.id, r.ID, r.Name, r.JoinCode, r.Devices)
 				s.resetChatView(p)
 				p.send(control{Type: "create_room_ack", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name, Code: r.JoinCode, DeviceIDs: r.Devices, InviteDeviceIDs: r.Invited})
-				for _, id := range r.Invited {
-					if other := s.peers[id]; other != nil && id != p.id {
-						other.send(control{Type: "room_invite", RoomID: r.ID, RoomName: r.Name, Code: r.JoinCode, SourceID: p.id})
-					}
-				}
+				s.roomInvitations(r)
+				s.roomJoined(p, r, "")
 				// Notify devices of their confirmed room.
 				s.mu.Lock()
 				for _, other := range s.peers {
@@ -511,6 +511,11 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				s.mu.Unlock()
 			}
 		case "accept_room_invite":
+			if p.sending != "" {
+				p.send(answer("accept_room_invite_ack", "", false, "busy"))
+				break
+			}
+			oldRoom := s.store.CurrentRoom(p.id).ID
 			r, err := s.store.Join(p.id, c.Code)
 			if err != nil {
 				p.send(answer("accept_room_invite_ack", "", false, err.Error()))
@@ -518,6 +523,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				p.send(control{Type: "accept_room_invite_ack", OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name})
 				s.resetChatView(p)
 				p.send(control{Type: "room_state", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), RoomID: r.ID, RoomName: r.Name})
+				s.roomJoined(p, r, oldRoom)
 			}
 		case "leave_room":
 			log.Printf("debug ws control device=%s type=leave_room room=%s", p.id, s.store.CurrentRoom(p.id).ID)
@@ -525,10 +531,12 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				p.send(control{Type: "room_state", OK: boolPtr(false), Error: "busy"})
 				break
 			}
+			oldRoom := s.store.CurrentRoom(p.id).ID
 			r := s.store.Leave(p.id)
 			log.Printf("debug room left device=%s room=%s", p.id, r.ID)
 			s.resetChatView(p)
 			p.send(control{Type: "room_state", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), RoomID: r.ID, RoomName: r.Name})
+			s.roomJoined(p, r, oldRoom)
 		case "receive_ready", "busy":
 			log.Printf("debug ws control device=%s type=%s message=%s", p.id, c.Type, c.MessageID)
 			s.mu.Lock()
@@ -600,9 +608,11 @@ func main() {
 	}
 	log.Printf("intercom listening on %s", *addr)
 	s.loadASRConfig()
+	s.loadTTSConfig()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go s.chat.run(ctx, s)
+	go s.chat.runTTS(ctx, s)
 	log.Fatal(http.ListenAndServe(*addr, httpHandler(s)))
 }
 

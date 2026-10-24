@@ -63,6 +63,17 @@ func (a *apiServer) rooms(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, e.Error(), 400)
 			return
 		}
+		a.s.roomInvitations(rr)
+		if x.CreatedByDeviceID != "" {
+			a.s.mu.Lock()
+			p := a.s.peers[x.CreatedByDeviceID]
+			if p != nil {
+				a.s.resetChatView(p)
+				p.send(control{Type: "room_state", RoomID: rr.ID, RoomName: rr.Name, ChatSessionID: p.playbackToken()})
+				a.s.roomNotice(p, rr, p.id, "member_joined")
+			}
+			a.s.mu.Unlock()
+		}
 		a.json(w, legacyRoom(rr))
 		return
 	}
@@ -120,6 +131,10 @@ func (a *apiServer) handler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("debug http request method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
 	log.Printf("debug http request method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
 	switch {
+	case r.URL.Path == "/api/tts/config":
+		a.ttsConfig(w, r)
+	case r.URL.Path == "/api/tts/test":
+		a.ttsTest(w, r)
 	case r.URL.Path == "/api/asr/config":
 		a.asrConfig(w, r)
 	case r.URL.Path == "/api/asr/test":

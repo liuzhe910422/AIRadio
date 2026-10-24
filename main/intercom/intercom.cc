@@ -200,6 +200,8 @@ bool Intercom::AcceptInvite(const std::string &code) {
 
 void Intercom::ClearChatSession() {
   StopChatReplay();
+  announcements_.clear();
+  announced_ids_.clear();
   chat_messages_.clear();
   chat_session_.clear();
   ++chat_revision_;
@@ -228,6 +230,9 @@ void Intercom::HandleChatEvent(const cJSON *json) {
     return;
   }
   IntercomChatMessage message;
+  message.system = !stringField("event_kind").empty();
+  bool announce =
+      cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "announce"));
   message.id = stringField("message_id");
   message.source = stringField("source_id");
   message.text = stringField("text");
@@ -262,9 +267,20 @@ void Intercom::HandleChatEvent(const cJSON *json) {
   if (message.audio_url.rfind("http://", 0) != 0 &&
       message.audio_url.rfind("https://", 0) != 0)
     message.available = false;
-  app_.Schedule([this, session, message = std::move(message)]() mutable {
+  app_.Schedule([this, session, announce,
+                 message = std::move(message)]() mutable {
     if (session != chat_session_)
       return;
+    if (message.system && announce && message.available &&
+        std::find(announced_ids_.begin(), announced_ids_.end(), message.id) ==
+            announced_ids_.end()) {
+      if (announced_ids_.size() >= 40)
+        announced_ids_.pop_front();
+      announced_ids_.push_back(message.id);
+      if (announcements_.size() >= 4)
+        announcements_.pop_front();
+      announcements_.push_back(message.id);
+    }
     auto found =
         std::find_if(chat_messages_.begin(), chat_messages_.end(),
                      [&message](const auto &m) { return m.id == message.id; });
@@ -520,6 +536,11 @@ void Intercom::Cancel() {
 }
 
 void Intercom::Tick() {
+  if (CanRecord() && !replay_task_active_ && !announcements_.empty()) {
+    auto id = announcements_.front();
+    announcements_.pop_front();
+    PlayChatMessage(id);
+  }
   if (state_ == State::Replaying)
     PlaybackDrained();
   if (state_ == State::Recording &&
