@@ -5,9 +5,11 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 type apiServer struct {
+	mu       sync.Mutex
 	s        *server
 	sessions map[string]bool
 }
@@ -17,6 +19,8 @@ func (a *apiServer) json(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func (a *apiServer) auth(w http.ResponseWriter, r *http.Request) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	c, e := r.Cookie("airadio_admin")
 	if e != nil || !a.sessions[c.Value] {
 		http.Error(w, "unauthorized", 401)
@@ -30,7 +34,9 @@ func (a *apiServer) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid credentials", 401)
 		return
 	}
+	a.mu.Lock()
 	a.sessions["admin-session"] = true
+	a.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: "airadio_admin", Value: "admin-session", Path: "/"})
 	a.json(w, map[string]bool{"ok": true})
 }
@@ -114,6 +120,12 @@ func (a *apiServer) handler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("debug http request method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
 	log.Printf("debug http request method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
 	switch {
+	case r.URL.Path == "/api/asr/config":
+		a.asrConfig(w, r)
+	case r.URL.Path == "/api/asr/test":
+		a.asrTest(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/intercom/messages/") && strings.HasSuffix(r.URL.Path, "/audio"):
+		a.chatAudio(w, r)
 	case r.URL.Path == "/api/login":
 		a.login(w, r)
 	case r.URL.Path == "/api/rooms":

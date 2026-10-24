@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,6 +31,9 @@ const (
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 type control struct {
+	ChatEnabled     bool          `json:"chat_enabled,omitempty"`
+	ChatSessionID   string        `json:"chat_session_id,omitempty"`
+	PlaybackToken   string        `json:"playback_token,omitempty"`
 	RequestID       string        `json:"request_id,omitempty"`
 	Rooms           *[]listedRoom `json:"rooms,omitempty"`
 	Type            string        `json:"type"`
@@ -80,20 +85,26 @@ type outgoing struct {
 }
 
 type peer struct {
-	id        string
-	conn      *websocket.Conn
-	out       chan outgoing
-	stop      chan struct{}
-	closeOnce sync.Once
-	srv       *server
-	mu        sync.Mutex
-	receiving string
-	ready     bool
-	sending   string
-	frames    int
-	bytes     int
-	recording *wavRecording
-	roomID    string
+	chatEnabled    bool
+	chatToken      string
+	chatTokenMu    sync.Mutex
+	chatRoom       string
+	chatPackets    [][]byte
+	chatRecipients []chatRecipient
+	id             string
+	conn           *websocket.Conn
+	out            chan outgoing
+	stop           chan struct{}
+	closeOnce      sync.Once
+	srv            *server
+	mu             sync.Mutex
+	receiving      string
+	ready          bool
+	sending        string
+	frames         int
+	bytes          int
+	recording      *wavRecording
+	roomID         string
 }
 
 func (p *peer) enqueue(kind int, data []byte) bool {
@@ -144,18 +155,20 @@ func (p *peer) writer() {
 }
 
 type server struct {
-	mu        sync.Mutex
-	peers     map[string]*peer
-	active    *peer
-	started   time.Time
-	slots     chan struct{}
-	saveWAV   bool
-	recordDir string
-	store     roomStore
+	publicBaseURL string
+	chat          *chatService
+	mu            sync.Mutex
+	peers         map[string]*peer
+	active        *peer
+	started       time.Time
+	slots         chan struct{}
+	saveWAV       bool
+	recordDir     string
+	store         roomStore
 }
 
 func newServer() *server {
-	return &server{peers: make(map[string]*peer), slots: make(chan struct{}, maxConnections), store: newMemoryStore()}
+	return &server{chat: newChatService(), peers: make(map[string]*peer), slots: make(chan struct{}, maxConnections), store: newMemoryStore()}
 }
 
 func (s *server) remove(p *peer) {
@@ -164,6 +177,8 @@ func (s *server) remove(p *peer) {
 		delete(s.peers, p.id)
 	}
 	if s.active == p {
+		p.chatPackets = nil
+		p.chatRecipients = nil
 		s.discardRecording(p)
 		s.active = nil
 		for _, other := range s.peers {
@@ -194,6 +209,7 @@ func (s *server) register(p *peer, id string) error {
 		return errors.New("invalid, duplicate, or capacity-limited device_id")
 	}
 	p.id = id
+	s.resetChatView(p)
 	s.peers[id] = p
 	p.roomID = s.store.RegisterDevice(id, "").ID
 	log.Printf("connect id=%s online=%d", id, len(s.peers))
@@ -215,6 +231,14 @@ func (s *server) start(p *peer, c control) {
 	}
 	log.Printf("debug talk accepted sender=%s room=%s message=%s peers=%d", p.id, s.store.CurrentRoom(p.id).ID, c.MessageID, len(s.peers))
 	s.active = p
+	p.chatRoom = s.store.CurrentRoom(p.id).ID
+	p.chatPackets = nil
+	p.chatRecipients = []chatRecipient{{p, p.playbackToken()}}
+	for _, other := range s.peers {
+		if other != p && s.store.CurrentRoom(other.id).ID == p.chatRoom {
+			p.chatRecipients = append(p.chatRecipients, chatRecipient{other, other.playbackToken()})
+		}
+	}
 	s.started = time.Now()
 	p.sending, p.frames, p.bytes = c.MessageID, 0, 0
 	if s.saveWAV {
@@ -267,6 +291,7 @@ func (s *server) frame(p *peer, data []byte) error {
 	}
 	p.frames++
 	p.bytes += len(data)
+	p.chatPackets = append(p.chatPackets, append([]byte(nil), data...))
 	if p.recording != nil {
 		if err := p.recording.appendOpus(data); err != nil {
 			log.Printf("debug WAV failed id=%s message=%s: %v", p.id, p.sending, err)
@@ -314,6 +339,7 @@ func (s *server) end(p *peer, c control) error {
 		}
 		other.mu.Unlock()
 	}
+	s.completeChat(p)
 	p.send(control{Type: "end_ack", MessageID: c.MessageID, OK: boolPtr(true), Receivers: receivers})
 	if p.recording != nil {
 		if err := p.recording.finish(); err != nil {
@@ -339,6 +365,8 @@ func (s *server) abort(p *peer) {
 		return
 	}
 	log.Printf("abort id=%s message=%s frames=%d bytes=%d", p.id, p.sending, p.frames, p.bytes)
+	p.chatPackets = nil
+	p.chatRecipients = nil
 	s.discardRecording(p)
 	for _, other := range s.peers {
 		other.mu.Lock()
@@ -389,10 +417,12 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("debug ws hello accepted device=%s room=%s remote=%s", p.id, s.store.CurrentRoom(p.id).ID, r.RemoteAddr)
+	p.chatEnabled = hello.ChatEnabled
 	go p.writer()
 	current := s.store.CurrentRoom(p.id)
 	ack := answer("hello_ack", "", true, "")
 	ack.RoomID, ack.RoomName = current.ID, current.Name
+	ack.ChatSessionID, ack.PlaybackToken = p.playbackToken(), p.playbackToken()
 	p.send(ack)
 	for {
 		kind, data, err = conn.ReadMessage()
@@ -445,7 +475,8 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				p.send(answer("join_room_ack", "", false, err.Error()))
 			} else {
 				log.Printf("debug room joined device=%s room=%s name=%s", p.id, r.ID, r.Name)
-				p.send(control{Type: "join_room_ack", OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name})
+				s.resetChatView(p)
+				p.send(control{Type: "join_room_ack", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name})
 			}
 		case "create_room":
 			invited := c.InviteDeviceIDs
@@ -463,15 +494,14 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				p.send(answer("create_room_ack", "", false, err.Error()))
 			} else {
 				log.Printf("debug room created device=%s room=%s name=%s code=%s devices=%v", p.id, r.ID, r.Name, r.JoinCode, r.Devices)
-				p.send(control{Type: "create_room_ack", OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name, Code: r.JoinCode, DeviceIDs: r.Devices, InviteDeviceIDs: r.Invited})
+				s.resetChatView(p)
+				p.send(control{Type: "create_room_ack", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name, Code: r.JoinCode, DeviceIDs: r.Devices, InviteDeviceIDs: r.Invited})
 				for _, id := range r.Invited {
 					if other := s.peers[id]; other != nil && id != p.id {
 						other.send(control{Type: "room_invite", RoomID: r.ID, RoomName: r.Name, Code: r.JoinCode, SourceID: p.id})
 					}
 				}
-				// Creating a room with an empty device list moves every currently
-				// registered device. Notify each affected simulator so its card and
-				// subsequent routing state update immediately.
+				// Notify devices of their confirmed room.
 				s.mu.Lock()
 				for _, other := range s.peers {
 					if s.store.CurrentRoom(other.id).ID == r.ID {
@@ -486,7 +516,8 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				p.send(answer("accept_room_invite_ack", "", false, err.Error()))
 			} else {
 				p.send(control{Type: "accept_room_invite_ack", OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name})
-				p.send(control{Type: "room_state", RoomID: r.ID, RoomName: r.Name})
+				s.resetChatView(p)
+				p.send(control{Type: "room_state", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), RoomID: r.ID, RoomName: r.Name})
 			}
 		case "leave_room":
 			log.Printf("debug ws control device=%s type=leave_room room=%s", p.id, s.store.CurrentRoom(p.id).ID)
@@ -496,7 +527,8 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			r := s.store.Leave(p.id)
 			log.Printf("debug room left device=%s room=%s", p.id, r.ID)
-			p.send(control{Type: "room_state", RoomID: r.ID, RoomName: r.Name})
+			s.resetChatView(p)
+			p.send(control{Type: "room_state", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), RoomID: r.ID, RoomName: r.Name})
 		case "receive_ready", "busy":
 			log.Printf("debug ws control device=%s type=%s message=%s", p.id, c.Type, c.MessageID)
 			s.mu.Lock()
@@ -537,8 +569,16 @@ func main() {
 	saveWAV := flag.Bool("save-wav", true, "save complete uploads as debug WAV files")
 	recordDir := flag.String("record-dir", "recordings", "debug WAV directory")
 	dbPath := flag.String("db", "", "SQLite database path (optional)")
+	publicBaseURL := flag.String("public-base-url", "", "public HTTP(S) base URL for playback links, e.g. http://111.62.241.117:9200")
 	flag.Parse()
 	s := newServer()
+	s.publicBaseURL = strings.TrimRight(strings.TrimSpace(*publicBaseURL), "/")
+	if s.publicBaseURL != "" {
+		u, err := url.Parse(s.publicBaseURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			log.Fatal("invalid -public-base-url: expected HTTP(S) base URL without credentials, query or fragment")
+		}
+	}
 	if strings.TrimSpace(*dbPath) != "" {
 		if db, err := newSQLiteStore(*dbPath); err == nil {
 			s.store = db
@@ -559,6 +599,10 @@ func main() {
 		log.Printf("debug WAV enabled dir=%s", absoluteDir)
 	}
 	log.Printf("intercom listening on %s", *addr)
+	s.loadASRConfig()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.chat.run(ctx, s)
 	log.Fatal(http.ListenAndServe(*addr, httpHandler(s)))
 }
 
