@@ -20,11 +20,10 @@ sudo apt install libopus-dev libopusfile-dev pkg-config
 
 ```sh
 cd server
-export AIRADIO_ADMIN_PASSWORD='替换为你自己的管理密码'
 go run . -listen 0.0.0.0:8080 -db airadio.db
 ```
 
-管理页面地址为 `http://<服务器局域网IP>:8080/`，用户名为 `admin`，密码由 `AIRADIO_ADMIN_PASSWORD` 指定。未设置密码时，每次启动会生成临时随机密码并打印到启动日志。会话有效期为 12 小时，重启后需要重新登录；HTTPS 连接下 Cookie 会启用 Secure 标记。
+管理页面地址为 `http://<服务器局域网IP>:8080/`，用户名为 `admin`，密码为 `admin`。会话有效期为 12 小时，重启后需要重新登录；HTTPS 连接下 Cookie 会启用 Secure 标记。
 
 `-db airadio.db` 启用 SQLite 持久化，需要系统安装 `sqlite3` 命令；不传 `-db` 时房间和服务配置仅保存在内存。管理端关闭房间使用 `POST /api/rooms/<房间ID>/close`，在线成员会停止原房间播放、退出托管并收到默认房间状态。
 

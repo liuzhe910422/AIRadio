@@ -163,7 +163,6 @@ func (p *peer) writer() {
 }
 
 type server struct {
-	adminPassword string
 	publicBaseURL string
 	chat          *chatService
 	mu            sync.Mutex
@@ -614,11 +613,6 @@ func main() {
 	publicBaseURL := flag.String("public-base-url", "", "public HTTP(S) base URL for playback links, e.g. http://111.62.241.117:9200")
 	flag.Parse()
 	s := newServer()
-	s.adminPassword = os.Getenv("AIRADIO_ADMIN_PASSWORD")
-	if s.adminPassword == "" {
-		s.adminPassword = randomToken()
-		log.Printf("temporary admin password (set AIRADIO_ADMIN_PASSWORD to override): %s", s.adminPassword)
-	}
 	s.publicBaseURL = strings.TrimRight(strings.TrimSpace(*publicBaseURL), "/")
 	if s.publicBaseURL != "" {
 		u, err := url.Parse(s.publicBaseURL)

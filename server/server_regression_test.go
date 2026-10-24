@@ -17,7 +17,6 @@ import (
 
 func TestAdminSessions(t *testing.T) {
 	s := newServer()
-	s.adminPassword = "configured-password"
 	a := &apiServer{s: s, sessions: map[string]time.Time{}}
 	login := func(password string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -26,12 +25,12 @@ func TestAdminSessions(t *testing.T) {
 		a.login(w, httptest.NewRequest("POST", "/api/login", strings.NewReader(string(body))))
 		return w
 	}
-	if w := login("admin"); w.Code != 401 {
-		t.Fatalf("default password accepted: %d", w.Code)
+	if w := login("wrong"); w.Code != 401 {
+		t.Fatalf("wrong password accepted: %d", w.Code)
 	}
-	first, second := login(s.adminPassword), login(s.adminPassword)
+	first, second := login("admin"), login("admin")
 	if first.Code != 200 || second.Code != 200 {
-		t.Fatal("configured password rejected")
+		t.Fatal("default password rejected")
 	}
 	c1, c2 := first.Result().Cookies()[0], second.Result().Cookies()[0]
 	if c1.Value == c2.Value || c1.Value == "admin-session" || !c1.HttpOnly || c1.SameSite != http.SameSiteStrictMode || c1.MaxAge != 43200 {
@@ -49,7 +48,7 @@ func TestAdminSessions(t *testing.T) {
 	if request(c1.Value) {
 		t.Fatal("expired session accepted")
 	}
-	r := httptest.NewRequest("POST", "https://example.test/api/login", strings.NewReader(`{"username":"admin","password":"configured-password"}`))
+	r := httptest.NewRequest("POST", "https://example.test/api/login", strings.NewReader(`{"username":"admin","password":"admin"}`))
 	w := httptest.NewRecorder()
 	a.login(w, r)
 	if !w.Result().Cookies()[0].Secure {
