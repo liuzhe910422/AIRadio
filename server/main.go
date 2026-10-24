@@ -96,6 +96,7 @@ type peer struct {
 	chatToken       string
 	chatTokenMu     sync.Mutex
 	chatRoom        string
+	switching       bool // Guarded by server.mu.
 	chatPackets     [][]byte
 	chatRecipients  []chatRecipient
 	id              string
@@ -162,6 +163,7 @@ func (p *peer) writer() {
 }
 
 type server struct {
+	adminPassword string
 	publicBaseURL string
 	chat          *chatService
 	mu            sync.Mutex
@@ -240,6 +242,11 @@ func (s *server) start(p *peer, c control) {
 	}
 	if s.active != nil {
 		log.Printf("start rejected id=%s message=%s reason=busy active_id=%s", p.id, c.MessageID, s.active.id)
+		p.send(answer("start_ack", c.MessageID, false, "busy"))
+		return
+	}
+	if p.switching {
+		log.Printf("start rejected id=%s message=%s reason=switching_room", p.id, c.MessageID)
 		p.send(answer("start_ack", c.MessageID, false, "busy"))
 		return
 	}
@@ -340,9 +347,10 @@ func (s *server) end(p *peer, c control) error {
 		return errors.New("invalid end or frame count")
 	}
 	receivers := 0
+	// Room changes clear receiving, so matching it is enough to stay in-room.
 	for _, other := range s.peers {
 		other.mu.Lock()
-		if other != p && s.store.CurrentRoom(other.id).ID == s.store.CurrentRoom(p.id).ID && other.receiving == c.MessageID {
+		if other != p && other.receiving == c.MessageID {
 			if other.ready && other.send(control{Type: "end", MessageID: c.MessageID, FrameCount: p.frames}) {
 				receivers++
 				log.Printf("receive end queued id=%s message=%s frames=%d", other.id, c.MessageID, p.frames)
@@ -375,6 +383,11 @@ func boolPtr(v bool) *bool { return &v }
 func (s *server) abort(p *peer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.abortLocked(p)
+}
+
+// Requires server.mu.
+func (s *server) abortLocked(p *peer) {
 	if s.active != p {
 		return
 	}
@@ -425,13 +438,18 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var hello control
-	if json.Unmarshal(data, &hello) != nil || hello.Type != "hello" || hello.Version != 1 || s.register(p, hello.DeviceID) != nil {
+	if json.Unmarshal(data, &hello) != nil {
+		log.Printf("debug ws hello rejected remote=%s reason=invalid_json", r.RemoteAddr)
+		conn.WriteJSON(answer("hello_ack", "", false, "invalid hello"))
+		return
+	}
+	p.chatEnabled = hello.ChatEnabled
+	if hello.Type != "hello" || hello.Version != 1 || s.register(p, hello.DeviceID) != nil {
 		log.Printf("debug ws hello rejected remote=%s", r.RemoteAddr)
 		conn.WriteJSON(answer("hello_ack", "", false, "invalid version or device_id"))
 		return
 	}
 	log.Printf("debug ws hello accepted device=%s room=%s remote=%s", p.id, s.store.CurrentRoom(p.id).ID, r.RemoteAddr)
-	p.chatEnabled = hello.ChatEnabled
 	go p.writer()
 	current := s.store.CurrentRoom(p.id)
 	ack := answer("hello_ack", "", true, "")
@@ -498,18 +516,13 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 			s.start(p, c)
 		case "join_room":
 			log.Printf("debug ws control device=%s type=join_room code=%s", p.id, c.Code)
-			if p.sending != "" {
-				p.send(answer("join_room_ack", "", false, "busy"))
-				break
-			}
 			oldRoom := s.store.CurrentRoom(p.id).ID
-			r, err := s.store.Join(p.id, c.Code)
+			r, err := s.changeRoom(p.id, func() (room, error) { return s.store.Join(p.id, c.Code) })
 			if err != nil {
 				log.Printf("debug room join failed device=%s code=%s error=%v", p.id, c.Code, err)
 				p.send(answer("join_room_ack", "", false, err.Error()))
 			} else {
 				log.Printf("debug room joined device=%s room=%s name=%s", p.id, r.ID, r.Name)
-				s.resetChatView(p)
 				p.send(control{Type: "join_room_ack", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name})
 				s.roomJoined(p, r, oldRoom)
 			}
@@ -519,17 +532,12 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				invited = c.DeviceIDs
 			}
 			log.Printf("debug ws control device=%s type=create_room name=%q invite_count=%d", p.id, c.Name, len(invited))
-			if p.sending != "" {
-				p.send(answer("create_room_ack", "", false, "busy"))
-				break
-			}
-			r, err := s.store.CreateRoom(c.Name, p.id, invited)
+			r, err := s.changeRoom(p.id, func() (room, error) { return s.store.CreateRoom(c.Name, p.id, invited) })
 			if err != nil {
 				log.Printf("debug room create failed device=%s name=%q error=%v", p.id, c.Name, err)
 				p.send(answer("create_room_ack", "", false, err.Error()))
 			} else {
 				log.Printf("debug room created device=%s room=%s name=%s code=%s devices=%v", p.id, r.ID, r.Name, r.JoinCode, r.Devices)
-				s.resetChatView(p)
 				p.send(control{Type: "create_room_ack", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name, Code: r.JoinCode, DeviceIDs: r.Devices, InviteDeviceIDs: r.Invited})
 				s.roomInvitations(r)
 				s.roomJoined(p, r, "")
@@ -543,30 +551,24 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				s.mu.Unlock()
 			}
 		case "accept_room_invite":
-			if p.sending != "" {
-				p.send(answer("accept_room_invite_ack", "", false, "busy"))
-				break
-			}
 			oldRoom := s.store.CurrentRoom(p.id).ID
-			r, err := s.store.Join(p.id, c.Code)
+			r, err := s.changeRoom(p.id, func() (room, error) { return s.store.Join(p.id, c.Code) })
 			if err != nil {
 				p.send(answer("accept_room_invite_ack", "", false, err.Error()))
 			} else {
 				p.send(control{Type: "accept_room_invite_ack", OK: boolPtr(true), RoomID: r.ID, RoomName: r.Name})
-				s.resetChatView(p)
 				p.send(control{Type: "room_state", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), RoomID: r.ID, RoomName: r.Name})
 				s.roomJoined(p, r, oldRoom)
 			}
 		case "leave_room":
 			log.Printf("debug ws control device=%s type=leave_room room=%s", p.id, s.store.CurrentRoom(p.id).ID)
-			if p.sending != "" {
-				p.send(control{Type: "room_state", OK: boolPtr(false), Error: "busy"})
+			oldRoom := s.store.CurrentRoom(p.id).ID
+			r, err := s.changeRoom(p.id, func() (room, error) { return s.store.Leave(p.id), nil })
+			if err != nil {
+				p.send(control{Type: "room_state", OK: boolPtr(false), Error: err.Error()})
 				break
 			}
-			oldRoom := s.store.CurrentRoom(p.id).ID
-			r := s.store.Leave(p.id)
 			log.Printf("debug room left device=%s room=%s", p.id, r.ID)
-			s.resetChatView(p)
 			p.send(control{Type: "room_state", ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken(), RoomID: r.ID, RoomName: r.Name})
 			s.roomJoined(p, r, oldRoom)
 		case "receive_ready", "busy":
@@ -612,6 +614,11 @@ func main() {
 	publicBaseURL := flag.String("public-base-url", "", "public HTTP(S) base URL for playback links, e.g. http://111.62.241.117:9200")
 	flag.Parse()
 	s := newServer()
+	s.adminPassword = os.Getenv("AIRADIO_ADMIN_PASSWORD")
+	if s.adminPassword == "" {
+		s.adminPassword = randomToken()
+		log.Printf("temporary admin password (set AIRADIO_ADMIN_PASSWORD to override): %s", s.adminPassword)
+	}
 	s.publicBaseURL = strings.TrimRight(strings.TrimSpace(*publicBaseURL), "/")
 	if s.publicBaseURL != "" {
 		u, err := url.Parse(s.publicBaseURL)
@@ -653,7 +660,7 @@ func main() {
 func httpHandler(s *server) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handle)
-	api := &apiServer{s: s, sessions: map[string]bool{}}
+	api := &apiServer{s: s, sessions: map[string]time.Time{}}
 	mux.HandleFunc("/api/", api.handler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
