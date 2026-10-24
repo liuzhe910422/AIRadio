@@ -192,7 +192,7 @@ func (c *chatService) processHosting(ctx context.Context, s *server, j hostingJo
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	synthetic := &peer{id: j.p.id, sending: randomToken(), out: make(chan outgoing, 16), automatic: true}
+	synthetic := &peer{id: j.p.id, sending: randomToken(), out: make(chan outgoing, 16), automatic: true, chatRoom: j.room}
 	s.active = synthetic
 	s.started = time.Now()
 	recipients := []chatRecipient{}

@@ -193,7 +193,7 @@ func TestRoomsAreIsolatedAndJoinCodeMovesDevice(t *testing.T) {
 	if got := s.store.Leave("a"); got.ID != "default" {
 		t.Fatalf("leave room = %+v", got)
 	}
-	if err := s.store.CloseRoom(r.ID); err != nil {
+	if _, err := s.store.CloseRoom(r.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.store.CurrentRoom("b"); got.ID != "default" {

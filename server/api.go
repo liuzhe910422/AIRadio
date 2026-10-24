@@ -6,12 +6,13 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 type apiServer struct {
 	mu       sync.Mutex
 	s        *server
-	sessions map[string]bool
+	sessions map[string]time.Time
 }
 
 func (a *apiServer) json(w http.ResponseWriter, v any) {
@@ -22,22 +23,38 @@ func (a *apiServer) auth(w http.ResponseWriter, r *http.Request) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	c, e := r.Cookie("airadio_admin")
-	if e != nil || !a.sessions[c.Value] {
+	if e != nil || !time.Now().Before(a.sessions[c.Value]) {
 		http.Error(w, "unauthorized", 401)
 		return false
 	}
 	return true
 }
 func (a *apiServer) login(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 	var x struct{ Username, Password string }
-	if json.NewDecoder(r.Body).Decode(&x) != nil || x.Username != "admin" || x.Password != "admin" {
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&x) != nil || x.Username != "admin" || x.Password != "admin" {
 		http.Error(w, "invalid credentials", 401)
 		return
 	}
+	token := randomToken()
+	expires := time.Now().Add(12 * time.Hour)
 	a.mu.Lock()
-	a.sessions["admin-session"] = true
+	for key, expiry := range a.sessions {
+		if !time.Now().Before(expiry) {
+			delete(a.sessions, key)
+		}
+	}
+	if len(a.sessions) >= 128 {
+		a.mu.Unlock()
+		http.Error(w, "session limit reached", http.StatusTooManyRequests)
+		return
+	}
+	a.sessions[token] = expires
 	a.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "airadio_admin", Value: "admin-session", Path: "/"})
+	http.SetCookie(w, &http.Cookie{Name: "airadio_admin", Value: token, Path: "/", Expires: expires, MaxAge: 43200, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
 	a.json(w, map[string]bool{"ok": true})
 }
 func (a *apiServer) rooms(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +75,7 @@ func (a *apiServer) rooms(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid json", 400)
 			return
 		}
-		rr, e := a.s.store.CreateRoom(x.Name, x.CreatedByDeviceID, x.DeviceIDs)
+		rr, e := a.s.changeRoom(x.CreatedByDeviceID, func() (room, error) { return a.s.store.CreateRoom(x.Name, x.CreatedByDeviceID, x.DeviceIDs) })
 		if e != nil {
 			http.Error(w, e.Error(), 400)
 			return
@@ -68,8 +85,7 @@ func (a *apiServer) rooms(w http.ResponseWriter, r *http.Request) {
 			a.s.mu.Lock()
 			p := a.s.peers[x.CreatedByDeviceID]
 			if p != nil {
-				a.s.resetChatView(p)
-				p.send(control{Type: "room_state", RoomID: rr.ID, RoomName: rr.Name, ChatSessionID: p.playbackToken()})
+				p.send(control{Type: "room_state", RoomID: rr.ID, RoomName: rr.Name, ChatSessionID: p.playbackToken(), PlaybackToken: p.playbackToken()})
 				a.s.roomNotice(p, rr, p.id, "member_joined")
 			}
 			a.s.mu.Unlock()
@@ -105,7 +121,11 @@ func (a *apiServer) roomAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(p) == 4 && p[3] == "close" {
-		if e := a.s.store.CloseRoom(id); e != nil {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if e := a.s.closeRoom(id); e != nil {
 			http.Error(w, e.Error(), 400)
 			return
 		}
