@@ -1,170 +1,81 @@
-# MCP ベースのチャットボット
+# Lingxi AIRadio：業務現場向け AI インターコム
 
-（日本語 | [中文](README_zh.md) | [English](README.md)）
+（[English](README.md) | [中文](README_zh.md) | 日本語）
 
-## はじめに
+<p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="Lingxi AIRadio システム構成" width="900"></p>
 
-👉 [人間：AIにカメラを装着 vs AI：その場で飼い主が3日間髪を洗っていないことを発見【bilibili】](https://www.bilibili.com/video/BV1bpjgzKEhd/)
+Lingxi AIRadio は、XiaoZhi の音声インタラクションと ESP32 ファームウェアを基盤にした業務向けインターコムソリューションです。車両隊列、物流パーク、倉庫、現場チームを対象に、リアルタイム半二重通話、音声によるルーム操作、オンライン AI 管理応答、直近の会話確認を一つのワークフローにまとめます。
 
-👉 [手作りでAIガールフレンドを作る、初心者入門チュートリアル【bilibili】](https://www.bilibili.com/video/BV1XnmFYLEJN/)
+> **ワンタップで通話。ひとことで操作。忙しい時は AI がサポート。**
 
-シャオジーAIチャットボットは音声インタラクションの入口として、Qwen / DeepSeekなどの大規模モデルのAI能力を活用し、MCPプロトコルを通じてマルチエンド制御を実現します。
+## 解決したい課題
 
-<img src="docs/mcp-based-graph.jpg" alt="MCPであらゆるものを制御" width="320">
+ドライバーや倉庫・現場作業員は、運転や搬送で両手がふさがっていることが多くあります。従来の無線機は即時性に優れる一方、ルーム管理には手動操作が必要です。音声アシスタントは柔軟ですが、緊急の発言開始には向きません。
 
-## 最近の更新
+AIRadio は操作ごとに適した入力を使います。**即時発言は大きなボタン、複数手順の操作は音声、すぐに応答できない時は AI** が担当します。チームは素早く話し、少ない操作でグループを切り替え、直前の内容を確認できます。
 
-- 本プロジェクトはESP-IDF v6.0.1以降を必須とし、推奨SDKは[ESP-IDF `release/v6.1`](https://github.com/espressif/esp-idf/tree/release/v6.1)ブランチです。ESP-IDF 5.xはサポートしません。現在のマトリクスは171バリアントで、ESP32-S31バリアントにはIDF 6.1以降が必要です。
-- MQTTとBluFiの暗号処理をPSA Cryptoへ移行し、IDF 6のコンポーネント分割およびサードパーティ依存関係にも対応しました。
-- オーディオパイプラインの並行処理、MQTT/UDPパケット検証、リリースマトリクス選択処理を強化しました。
-- ESP-SR 2.4.7を使用すると、ESP32-P4 Rev1とRev3の両方がIDF 6に対応します。
+## 主な機能
 
-### 実装済み機能
+- **ワンタップのリアルタイム通話**：480×320 タッチ画面の大きなボタンで開始・終了。専用 WebSocket が Opus フレームを同じルームの端末へ転送します。
+- **音声によるルーム管理**：XiaoZhi MCP ツールでルームの一覧、作成、参加、退出、招待の受付、托管の有効・無効を操作できます。ルーム一覧は画面で確認できます。
+- **オンライン AI 托管**：人の発言を ASR で認識した後、托管端末が直近の文脈から返信要否を判断します。必要な場合は TTS でルームに返答します。人の発言が優先され、自動音声は中断できます。
+- **会話の振り返り**：発言者と時間を含む短期文字起こしを表示し、音声を再生できます。「直前の会話をまとめて」と音声で要約も依頼できます。
+- **現場で分かりやすい状態表示**：通常モードは青、托管モードは黄色で表示し、ルーム、発言者、システム通知を画面に明示します。
+- **管理コンソールとシミュレーター**：Go サービスで端末・ルーム管理、ブラウザ Opus シミュレーター、ASR・TTS・托管 LLM の設定とテストを提供します。
 
-- Wi-Fi、有線Ethernet、USB RNDIS、およびML307/EC801EまたはNT26 Cat.1 4Gに対応し、一部のボードではWi-Fiと4Gを切り替え可能
-- [ESP-SR](https://github.com/espressif/esp-sr)によるオフライン音声ウェイクアップとカスタムウェイクワード
-- 2種類の通信方式：[WebSocket](docs/websocket.md)と[MQTT + UDP](docs/mqtt-udp.md)
-- Opusオーディオストリーミングにより、従来のストリーミングASR + LLM + TTS構成とRealtimeエンドツーエンド音声モデルの両方に対応。AEC対応ハードウェアではリアルタイム全二重対話が可能
-- 話者認識、現在話している人を識別 [3D Speaker](https://github.com/modelscope/3D-Speaker)
-- OLED / LCDディスプレイで絵文字や豊かな感情表現を表示し、一部のボードではカメラによる視覚入力にも対応
-- バッテリー表示と電源管理
-- 38言語の画面表示に対応し、音声プロンプトはローカライズ済みリソースを優先して、未収録時は英語へフォールバック
-- ESP32、ESP32-C3、ESP32-C5、ESP32-C6、ESP32-S3、ESP32-P4チッププラットフォーム
-- ホットスポットまたはBluFiによるWi-Fiプロビジョニング
-- デバイス側MCPによるデバイス制御（音量・明るさ調整、アクション制御など）
-- クラウド側MCPで大規模モデル能力を拡張（スマートホーム制御、PCデスクトップ操作、知識検索、メール送受信など）
-- カスタマイズ可能なウェイクワード、フォント、絵文字、チャット背景、オンラインWeb編集に対応 ([カスタムアセットジェネレーター](https://github.com/78/xiaozhi-assets-generator))
+製品ページ：[AIRadio ホームページを開く](homeweb/index.html)
 
-## ハードウェア
+## システム構成
 
-### ブレッドボード手作り実践
+<p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="AIRadio システム構成" width="900"></p>
 
-Feishuドキュメントチュートリアルをご覧ください：
+AIRadio 端末は Intercom Service を経由せず、Lingxi 音声チャネルへ直接接続して音声操作を行います。Intercom Service は端末間のリアルタイム音声、ルーム、記録を担当します。
 
-👉 [「シャオジーAIチャットボット百科事典」](https://ccnphfhqs21z.feishu.cn/wiki/F5krwD16viZoF0kKkvDcrZNYnhb?from=from_copylink)
+1. **AIRadio 端末**：`main/intercom/` が端末 ID、ルーム状態、録音・再生、短期記録、MCP ツールを管理します。現在の主な対象は Waveshare ESP32-S3 Touch LCD 3.5B です。
+2. **Intercom Service**：`server/` の Go サービスが WebSocket 音声転送、ルーム・メンバー管理、HTTP コンソール、SQLite 永続化を提供します。インターコム接続は XiaoZhi アシスタントのセッションと独立しています。
+3. **AI サービス**：ASR は発言を文字に変換し、TTS は通知と托管返答を音声化し、Hosting LLM は返答要否を判断します。有界の非同期キューによりリアルタイム音声をブロックしません。
+4. **Lingxi 音声チャネル**：AIRadio 端末が Lingxi（XiaoZhi）音声チャネルへ直接接続し、自然言語の理解と MCP ツール呼び出しを行います。実際の発言操作は大きな端末ボタンで行うため、音声操作とインターコムを並行して使えます。
 
-ブレッドボードのデモ：
+音声経路は `マイク → 16 kHz モノラル Opus → WebSocket → 同じルームの端末 → ジッタバッファ → デコード再生` です。セッション終了後、サーバーが ASR を非同期実行し、条件を満たす托管端末が LLM 判定と TTS 応答を行います。
 
-![ブレッドボードデモ](docs/v1/wiring2.jpg)
+## 現在の範囲
 
-### 138のボードディレクトリと171のリリースバリアントに対応（一部のみ表示）
+主な対象は Waveshare ESP32-S3 Touch LCD 3.5B です。端末は直近 20 件を保持し、音声と文字はサーバーの一時メモリに保存します。端末アカウント連携、複数組織・ロール分離、オフライン再送、恒久履歴、複数インスタンス間ルーティングは未実装です。端末および再生 API は信頼できる連携環境を前提とします。托管には ASR、TTS、Hosting LLM の有効化と端末のオンライン状態が必要です。
 
-- <a href="https://oshwhub.com/li-chuang-kai-fa-ban/li-chuang-shi-zhan-pai-esp32-s3-kai-fa-ban" target="_blank" title="立創・実戦派 ESP32-S3 開発ボード">立創・実戦派 ESP32-S3 開発ボード</a>
-- <a href="https://github.com/espressif/esp-box" target="_blank" title="楽鑫 ESP32-S3-BOX-3">楽鑫 ESP32-S3-BOX-3</a>
-- <a href="https://docs.m5stack.com/zh_CN/core/CoreS3" target="_blank" title="M5Stack CoreS3">M5Stack CoreS3</a>
-- <a href="https://docs.m5stack.com/en/atom/Atomic%20Echo%20Base" target="_blank" title="AtomS3R + Echo Base">M5Stack AtomS3R + Echo Base</a>
-- <a href="https://gf.bilibili.com/item/detail/1108782064" target="_blank" title="マジックボタン2.4">マジックボタン2.4</a>
-- <a href="https://www.waveshare.net/shop/ESP32-S3-Touch-AMOLED-1.8.htm" target="_blank" title="微雪電子 ESP32-S3-Touch-AMOLED-1.8">微雪電子 ESP32-S3-Touch-AMOLED-1.8</a>
-- <a href="https://github.com/Xinyuan-LilyGO/T-Circle-S3" target="_blank" title="LILYGO T-Circle-S3">LILYGO T-Circle-S3</a>
-- <a href="https://oshwhub.com/tenclass01/xmini_c3" target="_blank" title="エビ兄さん Mini C3">エビ兄さん Mini C3</a>
-- <a href="https://oshwhub.com/movecall/cuican-ai-pendant-lights-up-y" target="_blank" title="Movecall CuiCan ESP32S3">CuiCan AIペンダント</a>
-- <a href="https://github.com/WMnologo/xingzhi-ai" target="_blank" title="無名科技Nologo-星智-1.54">無名科技Nologo-星智-1.54TFT</a>
-- <a href="https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html" target="_blank" title="SenseCAP Watcher">SenseCAP Watcher</a>
-- <a href="https://www.bilibili.com/video/BV1BHJtz6E2S/" target="_blank" title="ESP-HI 超低コストロボット犬">ESP-HI 超低コストロボット犬</a>
+## クイックスタート
 
-<div style="display: flex; justify-content: space-between;">
-  <a href="docs/v1/lichuang-s3.jpg" target="_blank" title="立創・実戦派 ESP32-S3 開発ボード">
-    <img src="docs/v1/lichuang-s3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/espbox3.jpg" target="_blank" title="楽鑫 ESP32-S3-BOX3">
-    <img src="docs/v1/espbox3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/m5cores3.jpg" target="_blank" title="M5Stack CoreS3">
-    <img src="docs/v1/m5cores3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/atoms3r.jpg" target="_blank" title="AtomS3R + Echo Base">
-    <img src="docs/v1/atoms3r.jpg" width="240" />
-  </a>
-  <a href="docs/v1/magiclick.jpg" target="_blank" title="マジックボタン2.4">
-    <img src="docs/v1/magiclick.jpg" width="240" />
-  </a>
-  <a href="docs/v1/waveshare.jpg" target="_blank" title="微雪電子 ESP32-S3-Touch-AMOLED-1.8">
-    <img src="docs/v1/waveshare.jpg" width="240" />
-  </a>
-  <a href="docs/v1/lilygo-t-circle-s3.jpg" target="_blank" title="LILYGO T-Circle-S3">
-    <img src="docs/v1/lilygo-t-circle-s3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/xmini-c3.jpg" target="_blank" title="エビ兄さん Mini C3">
-    <img src="docs/v1/xmini-c3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/movecall-cuican-esp32s3.jpg" target="_blank" title="CuiCan">
-    <img src="docs/v1/movecall-cuican-esp32s3.jpg" width="240" />
-  </a>
-  <a href="docs/v1/wmnologo_xingzhi_1.54.jpg" target="_blank" title="無名科技Nologo-星智-1.54">
-    <img src="docs/v1/wmnologo_xingzhi_1.54.jpg" width="240" />
-  </a>
-  <a href="docs/v1/sensecap_watcher.jpg" target="_blank" title="SenseCAP Watcher">
-    <img src="docs/v1/sensecap_watcher.jpg" width="240" />
-  </a>
-  <a href="docs/v1/esp-hi.jpg" target="_blank" title="ESP-HI 超低コストロボット犬">
-    <img src="docs/v1/esp-hi.jpg" width="240" />
-  </a>
-</div>
+### インターコムサービスを実行
 
-## ソフトウェア
+```sh
+cd server
+go run . -listen 127.0.0.1:9200 -db ./data/intercom.db
+```
 
-### ファームウェア書き込み
+コンソールは同じプロセスから提供されます。ログイン後に ASR、TTS、托管 LLM を設定してください。第三者 API キーはサーバー側だけに保存されます。
 
-初心者の方は、まず開発環境を構築せずに書き込み可能なファームウェアを使用することをおすすめします。
+### ファームウェアをビルド
 
-ファームウェアはデフォルトで公式 [xiaozhi.me](https://xiaozhi.me) サーバーに接続します。個人ユーザーはアカウント登録でQwenリアルタイムモデルを無料で利用できます。
+ESP-IDF v6.0.1 以降が必要です。`release/v6.1` ブランチを推奨し、ESP-IDF 5.x はサポートしません。
 
-👉 [初心者向けファームウェア書き込みガイド](https://ccnphfhqs21z.feishu.cn/wiki/Zpz4wXBtdimBrLk25WdcXzxcnNS)
+```sh
+python3 scripts/build.py --list-boards
+python3 scripts/build.py waveshare/esp32-s3-touch-lcd-3.5b --name default
+```
 
-### 開発環境
+ボード名は `--list-boards` の出力に合わせてください。書き込み後、Wi-Fi 詳細設定で `intercom.device_id` とインターコムサービス URL を設定します。
 
-- Cursor または VSCode
-- ESP-IDFプラグインをインストールしてください。最低要件は[ESP-IDF v6.0.1](https://github.com/espressif/esp-idf/releases/tag/v6.0.1)、推奨は[ESP-IDF `release/v6.1`](https://github.com/espressif/esp-idf/tree/release/v6.1)ブランチです。ESP-IDF 5.xはサポートしません
-- LinuxはWindowsよりも優れており、コンパイルが速く、ドライバの問題も少ない
-- 本プロジェクトはGoogle C++コードスタイルを採用、コード提出時は準拠を確認してください
+## ドキュメント
 
-`v6.1`リリースタグではなく、`release/v6.1`ブランチを使用してください。このタグではESP32-C3のWi-Fi初期化に失敗する問題が[#2344](https://github.com/78/xiaozhi-esp32/issues/2344)で報告されています。SDKのリビジョンを切り替えた後は、ESP-IDFディレクトリで`git submodule update --init --recursive`を実行し、その`export.sh`を読み込み直してから、本プロジェクトで`idf.py fullclean`を実行して再ビルドしてください。
+- [アーキテクチャ概要](design/intercom-overview.md)
+- [インターコムプロトコル](design/intercom-protocol.md)
+- [ASR とセッション記録](design/intercom-asr-session-chat.md)
+- [AI 托管モード](design/intercom-hosting.md)
+- [MCP 実装](design/intercom-mcp-implementation.md)
+- [480×320 UI](design/intercom-ui-480x320.md)
+- [カスタムボードガイド](docs/custom-board.md)
+- [WebSocket プロトコル](docs/websocket.md)
+- [MQTT + UDP プロトコル](docs/mqtt-udp.md)
 
-### 開発者ドキュメント
+## ライセンス
 
-- [カスタム開発ボードガイド](docs/custom-board.md) - シャオジーAI用のカスタム開発ボード作成方法
-- [MCPプロトコルIoT制御使用法](docs/mcp-usage.md) - MCPプロトコルでIoTデバイスを制御する方法
-- [MCPプロトコルインタラクションフロー](docs/mcp-protocol.md) - デバイス側MCPプロトコルの実装方法
-- [MQTT + UDP ハイブリッド通信プロトコルドキュメント](docs/mqtt-udp.md)
-- [詳細なWebSocket通信プロトコルドキュメント](docs/websocket.md)
-
-## 大規模モデル設定
-
-すでにシャオジーAIチャットボットデバイスをお持ちで、公式サーバーに接続済みの場合は、[xiaozhi.me](https://xiaozhi.me) コンソールで設定できます。
-
-👉 [バックエンド操作ビデオチュートリアル（旧インターフェース）](https://www.bilibili.com/video/BV1jUCUY2EKM/)
-
-## 関連オープンソースプロジェクト
-
-個人PCでサーバーをデプロイする場合は、以下のオープンソースプロジェクトを参照してください：
-
-- [xinnan-tech/xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server) Pythonサーバー
-- [joey-zhou/xiaozhi-esp32-server-java](https://github.com/joey-zhou/xiaozhi-esp32-server-java) Javaサーバー
-- [AnimeAIChat/xiaozhi-server-go](https://github.com/AnimeAIChat/xiaozhi-server-go) Golangサーバー
-- [hackers365/xiaozhi-esp32-server-golang](https://github.com/hackers365/xiaozhi-esp32-server-golang) Golangサーバー
-
-シャオジー通信プロトコルを利用した他のクライアントプロジェクト：
-
-- [huangjunsen0406/py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) Pythonクライアント
-- [TOM88812/xiaozhi-android-client](https://github.com/TOM88812/xiaozhi-android-client) Androidクライアント
-- [100askTeam/xiaozhi-linux](http://github.com/100askTeam/xiaozhi-linux) 百問科技提供のLinuxクライアント
-- [78/xiaozhi-sf32](https://github.com/78/xiaozhi-sf32) 思澈科技のBluetoothチップファームウェア
-- [QuecPython/solution-xiaozhiAI](https://github.com/QuecPython/solution-xiaozhiAI) 移遠提供のQuecPythonファームウェア
-
-## プロジェクトについて
-
-これはエビ兄さんがオープンソースで公開しているESP32プロジェクトで、MITライセンスのもと、誰でも無料で、商用利用も可能です。
-
-このプロジェクトを通じて、AIハードウェア開発を理解し、急速に進化する大規模言語モデルを実際のハードウェアデバイスに応用できるようになることを目指しています。
-
-ご意見やご提案があれば、いつでもIssueを提出するか、[Discord](https://discord.gg/C759fGMBcZ) または QQグループ：1011329060 にご参加ください。
-
-## スター履歴
-
-<a href="https://star-history.com/#78/xiaozhi-esp32&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=78/xiaozhi-esp32&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=78/xiaozhi-esp32&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=78/xiaozhi-esp32&type=Date" />
- </picture>
-</a> 
+本プロジェクトは MIT License で公開しています。AIRadio サービス、端末ファームウェア、製品ホームページはこのリポジトリで継続的に進化しています。
