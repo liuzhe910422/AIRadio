@@ -34,7 +34,7 @@
 
 ## 固件
 
-新增普通MCP self.intercom.set_hosting(enabled:boolean)、self.intercom.get_hosting()。设置工具返回仅表示请求排队，hosting_state成功后更新实际状态。开启时主按钮黄色、文字“托管模式”，点击请求退出，服务端确认后恢复手动。语音开关仍通过小智通道，沿用MCP回复完成后关闭小智会话规则。
+新增普通MCP self.intercom.set_hosting(enabled:boolean)、self.intercom.get_hosting()。设置工具返回仅表示请求排队，hosting_state成功后更新实际状态。开启时主按钮黄色、文字“托管模式”，点击请求退出，服务端确认后恢复手动。语音开关仍通过灵矽／小智通道，沿用MCP回复完成后关闭灵矽／小智会话规则。
 
 托管设备保持对讲连接并接收房间音频；服务端合成回复也向托管本机播放。自动消息在右侧标记“托管回复”。当前未实现设备后台离线代答、逐设备提示词、外部工具执行或长记忆。
 
@@ -51,6 +51,6 @@ set_hosting的中文工具描述已明确：
 - 普通模式是手动对讲，不是改变助手人设或回答风格；必须实际调用设置工具，不应只口头确认。
 - 查询当前模式使用get_hosting，查询结果为已确认状态。设置返回true仅表示请求入队，不保证服务端接受。
 
-实机联调已检查 `Assistant MCP tools/call: self.intercom.set_hosting` 和 `hosting_state` 成功响应。模型是否选择工具仍由小智服务端决定，工具描述不保证必然触发。
+实机联调已检查 `Assistant MCP tools/call: self.intercom.set_hosting` 和 `hosting_state` 成功响应。模型是否选择工具仍由灵矽／小智服务端决定，工具描述不保证必然触发。
 
 启用前先在控制台分别启用ASR、TTS及托管LLM服务，再通过设备MCP或模拟器开关启用当前设备。全局配置保存不等于设备进入托管。工具描述和核心实现已完成编译、服务端测试、真实百炼调用及端到端实机验收。
