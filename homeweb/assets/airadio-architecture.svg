@@ -1,9 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
-<title id="title">AIRadio system architecture</title><desc id="desc">AIRadio devices connect directly to the Lingxi XiaoZhi voice channel for voice interaction and MCP operations. Devices connect to the intercom service for room audio and records.</desc>
-<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#111c18"/><stop offset="1" stop-color="#182c20"/></linearGradient><linearGradient id="mint"><stop stop-color="#c2f6a4"/><stop offset="1" stop-color="#77c77d"/></linearGradient><filter id="glow"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
-<rect width="1200" height="560" rx="24" fill="url(#bg)"/><g fill="none" stroke="#b8e99b" stroke-opacity=".16" stroke-width="2"><path d="M120 210h230M850 210h230M192 88v77M585 370v100"/></g>
-<g font-family="Arial,'Noto Sans SC',sans-serif"><text x="55" y="57" fill="#c2f6a4" font-size="12" letter-spacing="3">AIRADIO / SYSTEM ARCHITECTURE</text><text x="55" y="88" fill="#eef5e9" font-size="26" font-weight="700">让现场语音，连接人与 AI</text>
-<g transform="translate(55 165)"><rect width="275" height="175" rx="16" fill="#21392a" stroke="#b8e99b" stroke-opacity=".45"/><text x="24" y="36" fill="#c2f6a4" font-size="12" letter-spacing="2">EDGE DEVICES</text><text x="24" y="77" fill="#fff" font-size="21" font-weight="700">AIRadio 终端</text><text x="24" y="111" fill="#b5c9b3" font-size="13">大按钮即时对讲</text><text x="24" y="138" fill="#b5c9b3" font-size="13">语音操控 · 屏幕状态</text><text x="24" y="165" fill="#b5c9b3" font-size="13">Opus 音频 · MCP 工具</text></g>
-<g transform="translate(430 165)"><rect width="310" height="175" rx="16" fill="#102018" stroke="#b8e99b" stroke-opacity=".7"/><text x="25" y="36" fill="#c2f6a4" font-size="12" letter-spacing="2">CORE SERVICE</text><text x="25" y="77" fill="#fff" font-size="21" font-weight="700">Intercom Service</text><text x="25" y="111" fill="#b5c9b3" font-size="13">房间、成员与实时音频路由</text><text x="25" y="138" fill="#b5c9b3" font-size="13">会话记录 · 控制台 · 有界队列</text><text x="25" y="165" fill="#b5c9b3" font-size="13">Go · WebSocket · SQLite</text></g>
-<g transform="translate(850 165)"><rect width="295" height="175" rx="16" fill="#21392a" stroke="#b8e99b" stroke-opacity=".45"/><text x="24" y="36" fill="#c2f6a4" font-size="12" letter-spacing="2">AI SERVICES</text><text x="24" y="77" fill="#fff" font-size="21" font-weight="700">ASR · TTS · LLM</text><text x="24" y="111" fill="#b5c9b3" font-size="13">语音转文字与语音播报</text><text x="24" y="138" fill="#b5c9b3" font-size="13">托管判断 · 按需代答</text><text x="24" y="165" fill="#b5c9b3" font-size="13">第三方密钥仅在服务端</text></g>
-<g fill="#c2f6a4" font-size="11" text-anchor="middle"><text x="390" y="202">WebSocket / Opus</text><text x="795" y="202">ASR · TTS · Hosting LLM</text><text x="192" y="125">Lingxi / XiaoZhi voice channel</text><text x="585" y="452">HTTP console / simulator</text></g><g stroke="url(#mint)" stroke-width="3" fill="none" marker-end="url(#arrow)"><path d="M330 252h100"/><path d="M740 252h110"/><path d="M192 165V92"/><path d="M740 330h-155v70"/></g><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0l8 4-8 4z" fill="#c2f6a4"/></marker></defs><text x="585" y="520" text-anchor="middle" fill="#728b78" font-size="12">终端直接连接灵矽语音通道 · 对讲服务独立路由实时音频 · AI 任务异步处理</text></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 960" role="img" aria-labelledby="title desc">
+<title id="title">灵矽 AIRadio 系统架构</title>
+<desc id="desc">真实 AIRadio ESP32 终端直接连接灵矽小智协议通道进行语音和 MCP 操作，并通过独立 Intercom Service 与同房间设备交换 Opus 音频。服务端异步调度 ASR、TTS 和 Hosting LLM。</desc>
+<defs>
+ <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0d1814"/><stop offset="1" stop-color="#183126"/></linearGradient>
+ <linearGradient id="mint" x1="0" x2="1"><stop stop-color="#d3ffb8"/><stop offset="1" stop-color="#83d986"/></linearGradient>
+ <linearGradient id="violet" x1="0" x2="1"><stop stop-color="#e0c8ff"/><stop offset="1" stop-color="#ad8cec"/></linearGradient>
+ <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000" flood-opacity=".24"/></filter>
+ <marker id="arrowMint" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#b9f6a5"/></marker>
+ <marker id="arrowMintStart" markerWidth="10" markerHeight="10" refX="1" refY="5" orient="auto"><path d="M10 0 0 5 10 10Z" fill="#b9f6a5"/></marker>
+ <marker id="arrowViolet" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#d0b2fb"/></marker>
+ <marker id="arrowVioletStart" markerWidth="10" markerHeight="10" refX="1" refY="5" orient="auto"><path d="M10 0 0 5 10 10Z" fill="#d0b2fb"/></marker>
+ <style>
+  .sans{font-family:Arial,'Noto Sans SC','PingFang SC',sans-serif}.eyebrow{font-size:12px;letter-spacing:3px;fill:#c2f6a4}.title{font-size:29px;font-weight:700;fill:#f4f8ed}.label{font-size:12px;letter-spacing:1.5px;fill:#9bb39b}.name{font-size:22px;font-weight:700;fill:#fff}.copy{font-size:14px;fill:#b7cdb7}.small{font-size:12px;fill:#91aa91}.tag{font-size:12px;font-weight:600}.lineLabel{font-size:12px;fill:#c9f4b6}.lineLabelV{font-size:12px;fill:#dfc9ff}.foot{font-size:12px;fill:#728b78}
+ </style>
+</defs>
+<rect width="1400" height="960" rx="28" fill="url(#bg)"/>
+<g class="sans"><text x="58" y="55" class="eyebrow">AIRADIO / REAL DEVICE ARCHITECTURE</text><text x="58" y="91" class="title">真实设备，把现场语音连接起来</text><text x="58" y="119" class="small">两条独立链路：灵矽／小智负责语音与 MCP，对讲服务负责实时音频与房间协作</text>
+<!-- top voice platform -->
+<rect x="335" y="150" width="730" height="105" rx="18" fill="#272039" stroke="#d0b2fb" stroke-opacity=".75" stroke-width="2" filter="url(#shadow)"/>
+<text x="365" y="182" class="label" fill="#dbc5ff">VOICE &amp; MCP PLATFORM</text><text x="365" y="218" class="name">灵矽／小智语音通道</text><text x="700" y="183" class="copy">语音识别　·　模型对话　·　TTS　·　MCP 工具调用</text><text x="700" y="214" class="small">两个平台，兼容同一套协议</text>
+<g transform="translate(0 65)">
+<!-- physical device cards -->
+<g filter="url(#shadow)"><rect x="20" y="305" width="330" height="226" rx="18" fill="#1e3a2a" stroke="#b9f6a5" stroke-opacity=".58" stroke-width="2"/><rect x="1050" y="305" width="330" height="226" rx="18" fill="#1e3a2a" stroke="#b9f6a5" stroke-opacity=".58" stroke-width="2"/></g>
+<g class="sans"><text x="45" y="340" class="label">REAL DEVICE A</text><text x="45" y="379" class="name">AIRadio 终端 002</text><text x="45" y="414" class="copy">Waveshare ESP32-S3 3.5B</text><text x="45" y="444" class="copy">480×320 触摸屏 · 大按钮</text><text x="45" y="474" class="copy">麦克风 · 扬声器 · ESP32 固件</text><rect x="45" y="492" width="125" height="23" rx="5" fill="#c2f6a4"/><text x="107" y="508" text-anchor="middle" class="tag" fill="#20351f">真实刷机运行</text>
+<text x="1070" y="340" class="label">REAL DEVICE B</text><text x="1070" y="379" class="name">AIRadio 终端 004</text><text x="1070" y="414" class="copy">同房间另一台真实设备</text><text x="1070" y="444" class="copy">接收 Opus · 播放语音</text><text x="1070" y="474" class="copy">状态同步 · 文字记录</text><rect x="1070" y="492" width="125" height="23" rx="5" fill="#c2f6a4"/><text x="1132" y="508" text-anchor="middle" class="tag" fill="#20351f">真实设备联调</text></g>
+<!-- service -->
+<rect x="520" y="305" width="360" height="226" rx="18" fill="#10251b" stroke="#b9f6a5" stroke-opacity=".85" stroke-width="2" filter="url(#shadow)"/>
+<text x="550" y="340" class="label">CORE SERVICE / GO</text><text x="550" y="379" class="name">Intercom Service</text><text x="550" y="414" class="copy">房间与成员管理 · WebSocket 音频路由</text><text x="550" y="444" class="copy">会话记录 · 控制台 · SQLite 持久化</text><text x="550" y="474" class="copy">AI 任务调度 · 有界队列 · 状态确认</text><rect x="550" y="492" width="180" height="23" rx="5" fill="#2c4c36"/><text x="640" y="508" text-anchor="middle" class="tag" fill="#c2f6a4">独立对讲链路</text>
+</g>
+<!-- voice arrows -->
+<path d="M185 370V310H500V255" fill="none" stroke="url(#violet)" stroke-width="3" marker-start="url(#arrowVioletStart)" marker-end="url(#arrowViolet)"/><path d="M1215 370V310H900V255" fill="none" stroke="url(#violet)" stroke-width="3" marker-start="url(#arrowVioletStart)" marker-end="url(#arrowViolet)"/>
+<text x="342" y="294" text-anchor="middle" class="lineLabelV sans">语音操作 · MCP</text><text x="1058" y="294" text-anchor="middle" class="lineLabelV sans">语音操作 · MCP</text>
+<!-- intercom arrows -->
+<path d="M350 483H520" fill="none" stroke="#b9f6a5" stroke-width="4" marker-start="url(#arrowMintStart)" marker-end="url(#arrowMint)"/><path d="M1050 483H880" fill="none" stroke="#b9f6a5" stroke-width="4" marker-start="url(#arrowMintStart)" marker-end="url(#arrowMint)"/>
+<text x="435" y="459" text-anchor="middle" class="lineLabel sans">WebSocket / Opus</text><text x="965" y="459" text-anchor="middle" class="lineLabel sans">WebSocket / Opus</text>
+<!-- AI layer -->
+<path d="M700 596V750" fill="none" stroke="#b9f6a5" stroke-width="3" marker-end="url(#arrowMint)"/><text x="720" y="675" class="lineLabel sans">异步任务，不阻塞实时音频</text>
+<g transform="translate(0 140)">
+<rect x="165" y="610" width="1070" height="125" rx="18" fill="#17271f" stroke="#b9f6a5" stroke-opacity=".35" stroke-width="2"/>
+<text x="205" y="646" class="label">AI SERVICES / SERVER SIDE</text>
+<g><rect x="205" y="665" width="260" height="45" rx="8" fill="#243b2b"/><text x="335" y="693" text-anchor="middle" class="name" font-size="17">ASR · 语音转文字</text><rect x="570" y="665" width="260" height="45" rx="8" fill="#243b2b"/><text x="700" y="693" text-anchor="middle" class="name" font-size="17">Hosting LLM · 判断代答</text><rect x="935" y="665" width="260" height="45" rx="8" fill="#243b2b"/><text x="1065" y="693" text-anchor="middle" class="name" font-size="17">TTS · 语音播报</text></g>
+</g>
+<!-- console / simulator -->
+<path d="M620 596V690H350V750" fill="none" stroke="#8ba99a" stroke-opacity=".8" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrowMint)"/><text x="245" y="674" class="small sans">HTTP 控制台 / 浏览器模拟器（辅助验证）</text>
+<text x="700" y="922" text-anchor="middle" class="foot sans">实时对讲：真实 ESP32 设备之间低延迟传输　｜　AI 处理：服务端异步识别、判断与播报</text></g></svg>
