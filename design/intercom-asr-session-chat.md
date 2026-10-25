@@ -18,7 +18,7 @@
 
 ## 2. Session 定义
 
-聊天 session 指设备本次对讲 WebSocket 连接期间、当前活动房间中的消息视图，与小智语音助手的 session_id 无关。
+聊天 session 指设备本次对讲 WebSocket 连接期间、当前活动房间中的消息视图，与灵矽／小智语音助手的 session_id 无关。
 
 - hello 注册成功：开始新的聊天 session。
 - 对讲 WebSocket 断开或设备重启：清空本机记录；重连不补拉旧记录。

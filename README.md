@@ -4,7 +4,9 @@
 
 <p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="Lingxi AIRadio system architecture" width="900"></p>
 
-Lingxi AIRadio is an industry intercom solution built on XiaoZhi voice interaction and ESP32 firmware. It is designed for fleets, logistics parks, warehouses, and temporary field teams. AIRadio combines real-time half-duplex voice, voice-controlled rooms, online AI hosting, and short-term conversation recall in one workflow.
+Lingxi AIRadio is an industry intercom solution built on the Lingxi/XiaoZhi voice channel and ESP32 firmware. It is designed for fleets, logistics parks, warehouses, and temporary field teams. AIRadio combines real-time half-duplex voice, voice-controlled rooms, online AI hosting, and short-term conversation recall in one workflow.
+
+> **Built on real hardware:** this project is more than a browser or virtual-device demo. The current feature set has been flashed onto and field-tested with a Waveshare ESP32-S3 Touch LCD 3.5B. After flashing the firmware and configuring the intercom service URL, the physical device provides the touch talk button, real-time intercom, voice room operations, ASR records, and AI hosting. The browser simulator is only an auxiliary tool for service and protocol validation.
 
 > **One tap to talk. One sentence to operate. An AI teammate when work gets busy.**
 
@@ -17,7 +19,7 @@ AIRadio gives each action the right interface: **a large button for instant spee
 ## Key capabilities
 
 - **One-tap real-time intercom**: a large 480×320 touch-screen control starts and ends a transmission. A dedicated WebSocket carries Opus frames to devices in the same room.
-- **Voice-controlled collaboration rooms**: XiaoZhi MCP tools can list, create, join, leave, and invite devices to rooms, and enable or disable hosting. A room list can be confirmed on the display.
+- **Voice-controlled collaboration rooms**: Lingxi/XiaoZhi MCP tools can list, create, join, leave, and invite devices to rooms, and enable or disable hosting. A room list can be confirmed on the display.
 - **Online AI hosting**: after a human message is transcribed, a hosted device uses recent room context to decide whether to answer. If needed, TTS broadcasts the response. Human speech has priority and can interrupt an automated reply.
 - **Conversation recall**: ASR produces short-term transcripts with speaker and duration, and messages can be replayed. Users can ask the assistant to summarize the currently retained conversation.
 - **Clear field-ready status**: manual mode uses a blue button and hosting mode uses yellow, while room, speaker, and system events remain visible.
@@ -43,7 +45,7 @@ The system has four layers. One important separation is that **AIRadio devices c
 The system has four layers:
 
 1. **AIRadio devices**: `main/intercom/` manages device identity, rooms, audio coordination, temporary records, and MCP tools. The current product target is Waveshare ESP32-S3 Touch LCD 3.5B with a 480×320 touch UI.
-2. **Intercom Service**: `server/` is a Go service for WebSocket audio routing, room and member management, the HTTP console, and optional SQLite persistence. The intercom connection is independent of the XiaoZhi assistant session.
+2. **Intercom Service**: `server/` is a Go service for WebSocket audio routing, room and member management, the HTTP console, and optional SQLite persistence. The intercom connection is independent of the Lingxi/XiaoZhi assistant session.
 3. **AI services**: ASR transcribes completed speech, TTS plays system announcements and hosted replies, and the Hosting LLM decides whether a hosted device should answer. Bounded asynchronous queues keep AI work away from the real-time audio path.
 4. **Lingxi voice channel**: AIRadio devices connect directly to the Lingxi (XiaoZhi) voice channel for natural-language understanding and MCP tool calls. Physical speech remains a large device-button action, so voice operations and intercom can coexist.
 
@@ -73,7 +75,9 @@ python3 scripts/build.py --list-boards
 python3 scripts/build.py waveshare/esp32-s3-touch-lcd-3.5b --name default
 ```
 
-Use the exact board name printed by `--list-boards`. After flashing, configure the independent `intercom.device_id` and intercom service URL in Wi-Fi advanced settings.
+Use the exact board name printed by `--list-boards`. After flashing the firmware onto the real device, configure the independent `intercom.device_id` and intercom service URL in Wi-Fi advanced settings. The feature set described above runs on the physical ESP32-S3 device; the browser simulator is only for auxiliary service validation.
+
+The recommended real device is the Waveshare ESP32-S3 Touch LCD 3.5B with a 480×320 landscape display. Once flashed and configured, it connects to the Lingxi/XiaoZhi channel for voice operations and to the independent Intercom Service for real-time room audio.
 
 ## Documentation
 
