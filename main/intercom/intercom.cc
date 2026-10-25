@@ -100,6 +100,7 @@ void Intercom::NetworkChanged(bool connected) {
       incoming_buffer_.clear();
       incoming_playback_started_ = false;
       incoming_initialized_ = false;
+      incoming_overflowed_ = false;
     }
     SetState(State::Disconnected);
     if (was_playing) {
@@ -968,10 +969,13 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
     packet->frame_duration = kFrameMs;
     packet->payload.assign(data, data + len);
     std::lock_guard<std::mutex> lock(incoming_mutex_);
+    if (incoming_overflowed_) {
+      return;
+    }
     if (incoming_buffer_.size() >= 12) {
       ESP_LOGW(kTag, "Receive jitter buffer full message=%s frames=%d",
                incoming_id_.c_str(), incoming_frames_);
-      incoming_id_.clear();
+      incoming_overflowed_ = true;
       incoming_buffer_.clear();
       incoming_playback_started_ = false;
       app_.Schedule([this]() { app_.GetAudioService().ResetDecoder(); });
@@ -1175,11 +1179,13 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
       incoming_playback_started_ = false;
       incoming_initialized_ = false;
     }
-    if (strcmp(name, "abort") == 0 || !cJSON_IsNumber(count) ||
-        count->valueint != incoming_frames_) {
+    if (incoming_overflowed_ || strcmp(name, "abort") == 0 ||
+        !cJSON_IsNumber(count) || count->valueint != incoming_frames_) {
       app_.Schedule([this]() { app_.GetAudioService().ResetDecoder(); });
     }
     incoming_id_.clear();
+    incoming_source_id_.clear();
+    incoming_overflowed_ = false;
     playback_started_at_ = 0;
     playback_ended_at_ = esp_timer_get_time();
     app_.Schedule([this]() { PlaybackDrained(); });

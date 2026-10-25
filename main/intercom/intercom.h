@@ -151,6 +151,7 @@ private:
   std::mutex incoming_mutex_;
   int incoming_buffer_target_ = 8;
   bool incoming_playback_started_ = false;
+  bool incoming_overflowed_ = false;
   std::atomic<bool> incoming_initialized_{false};
   int64_t record_started_ = 0;
   void SetState(State state);
