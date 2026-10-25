@@ -16,6 +16,18 @@ import (
 	"time"
 )
 
+func validJoinCode(code string) bool {
+	if len(code) != 4 || code[0] < '1' || code[0] > '9' {
+		return false
+	}
+	for i := 1; i < len(code); i++ {
+		if code[i] < '0' || code[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 type room struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
@@ -102,6 +114,9 @@ func (s *memoryStore) CurrentRoom(id string) room {
 	return s.currentLocked(id)
 }
 func (s *memoryStore) Join(id, code string) (room, error) {
+	if !validJoinCode(code) {
+		return room{}, errors.New("invalid room code")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rooms {
@@ -157,7 +172,7 @@ func (s *memoryStore) CreateRoom(name, creator string, invited []string) (room, 
 	for {
 		b := make([]byte, 4)
 		_, _ = rand.Read(b)
-		code = fmt.Sprintf("%06d", uint32(b[0])<<16|uint32(b[1])<<8|uint32(b[2]))[:6]
+		code = fmt.Sprintf("%04d", 1000+(uint32(b[0])<<8|uint32(b[1]))%9000)
 		found := false
 		for _, r := range s.rooms {
 			if r.JoinCode == code {

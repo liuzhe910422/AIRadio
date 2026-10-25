@@ -58,6 +58,7 @@ Intercom::Intercom(Application &app) : app_(app) {
   Settings settings("intercom");
   id_ = settings.GetString("device_id");
   url_ = settings.GetString("server_url");
+  api_key_ = settings.GetString("api_key");
   LogConfig("startup", id_, url_);
   if (!id_.empty() && url_.rfind("ws://", 0) == 0)
     state_ = State::Disconnected;
@@ -78,6 +79,7 @@ void Intercom::NetworkChanged(bool connected) {
     Settings settings("intercom");
     id_ = settings.GetString("device_id");
     url_ = settings.GetString("server_url");
+    api_key_ = settings.GetString("api_key");
     LogConfig("network connected", id_, url_);
     SetState(!id_.empty() && url_.rfind("ws://", 0) == 0 ? State::Disconnected
                                                          : State::Disabled);
@@ -240,8 +242,9 @@ void Intercom::ShowRoomPicker(const std::string &response,
         !cJSON_IsTrue(cJSON_GetObjectItem(item, "can_join")))
       continue;
     if (!is_default &&
-        (!cJSON_IsString(code) || strlen(code->valuestring) != 6 ||
-         strspn(code->valuestring, "0123456789") != 6))
+        (!cJSON_IsString(code) || strlen(code->valuestring) != 4 ||
+         code->valuestring[0] < '1' || code->valuestring[0] > '9' ||
+         strspn(code->valuestring, "0123456789") != 4))
       continue;
     room_options_.push_back(
         {id->valuestring, name->valuestring,
@@ -303,9 +306,14 @@ bool Intercom::JoinRoom(const std::string &code) {
   return SendText("{\"type\":\"join_room\",\"code\":\"" + code + "\"}");
 }
 bool Intercom::LeaveRoom() { return SendText("{\"type\":\"leave_room\"}"); }
-bool Intercom::AcceptInvite(const std::string &code) {
-  return SendText("{\"type\":\"accept_room_invite\",\"code\":\"" + code +
-                  "\"}");
+bool Intercom::AcceptInvite() {
+  if (pending_invite_code_.empty())
+    return false;
+  bool sent = SendText("{\"type\":\"accept_room_invite\",\"code\":\"" +
+                       pending_invite_code_ + "\"}");
+  if (sent)
+    pending_invite_code_.clear();
+  return sent;
 }
 
 cJSON *Intercom::GetSessionTranscript() const {
@@ -934,6 +942,8 @@ void Intercom::SendRealtimeFrames() {
 }
 
 void Intercom::OnData(const char *data, size_t len, bool binary) {
+  ESP_LOGI(kTag, "WebSocket data received: binary=%d len=%u state=%d", binary,
+           static_cast<unsigned>(len), static_cast<int>(state_.load()));
   if (binary) {
     if (state_ != State::Playing || len == 0 || len > kMaxFrameBytes ||
         incoming_frames_ >= kMaxFrames) {
@@ -988,8 +998,10 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
   if (len > 8192)
     return;
   cJSON *json = cJSON_ParseWithLength(data, len);
-  if (!json)
+  if (!json) {
+    ESP_LOGW(kTag, "WebSocket text frame is not valid JSON");
     return;
+  }
   auto type = cJSON_GetObjectItem(json, "type");
   auto id = cJSON_GetObjectItem(json, "message_id");
   auto ok = cJSON_GetObjectItem(json, "ok");
@@ -997,6 +1009,11 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
   auto room_name = cJSON_GetObjectItem(json, "room_name");
   const char *name = cJSON_IsString(type) ? type->valuestring : "";
   const char *mid = cJSON_IsString(id) ? id->valuestring : "";
+  ESP_LOGI(kTag, "WebSocket control received: type=%s ok=%d error=%s", name,
+           cJSON_IsTrue(ok),
+           cJSON_IsString(cJSON_GetObjectItem(json, "error"))
+               ? cJSON_GetObjectItem(json, "error")->valuestring
+               : "");
   if (!strcmp(name, "list_rooms_ack")) {
     auto request = cJSON_GetObjectItem(json, "request_id");
     std::lock_guard<std::mutex> lock(rooms_mutex_);
@@ -1022,6 +1039,14 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
     room_name_ = room_name->valuestring;
   }
   if (!strcmp(name, "room_invite") && cJSON_IsString(room_name)) {
+    auto code = cJSON_GetObjectItem(json, "code");
+    if (cJSON_IsString(code) && strlen(code->valuestring) == 4) {
+      pending_invite_code_ = code->valuestring;
+      pending_invite_room_name_ = room_name->valuestring;
+      ESP_LOGI(kTag, "Stored latest room invitation: room=%s code_len=%u",
+               pending_invite_room_name_.c_str(),
+               static_cast<unsigned>(pending_invite_code_.size()));
+    }
     ESP_LOGI(kTag,
              "Room invitation received: target=%s; current room unchanged",
              room_name->valuestring);
@@ -1057,9 +1082,24 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
                   : "托管设置失败，请检查服务端配置");
     });
   }
-  if (!strcmp(name, "hello_ack"))
+  if (!strcmp(name, "hello_ack")) {
     hello_ok_ = cJSON_IsTrue(ok);
-  else if (!strcmp(name, "start_ack") && message_id_ == mid) {
+    ESP_LOGI(kTag, "hello_ack processed: ok=%d auth_notified=%d",
+             hello_ok_.load(), auth_error_notified_.load());
+    if (hello_ok_) {
+      auth_error_notified_ = false;
+      auth_error_ = false;
+    } else {
+      auto error = cJSON_GetObjectItem(json, "error");
+      const bool invalid_key =
+          cJSON_IsString(error) &&
+          !strcmp(error->valuestring, "invalid intercom api key");
+      if (invalid_key && !auth_error_notified_.exchange(true)) {
+        auth_error_received_ = true;
+        auth_error_ = true;
+      }
+    }
+  } else if (!strcmp(name, "start_ack") && message_id_ == mid) {
     start_ok_ = cJSON_IsTrue(ok);
     if (!start_ok_)
       session_failed_ = true;
@@ -1162,15 +1202,42 @@ void Intercom::NetworkTask() {
     ws_ = Board::GetInstance().GetNetwork()->CreateWebSocket();
     if (ws_) {
       ws_->OnData([this](const char *data, size_t len, bool binary) {
+        ESP_LOGI(kTag, "WebSocket OnData callback entered: binary=%d len=%u",
+                 binary, static_cast<unsigned>(len));
         OnData(data, len, binary);
       });
-      ws_->OnDisconnected([this]() { session_failed_ = true; });
+      ws_->OnDisconnected([this]() {
+        ESP_LOGW(kTag, "WebSocket disconnected callback: hello_ok=%d",
+                 hello_ok_.load());
+        session_failed_ = true;
+      });
       if (ws_->Connect(url_.c_str())) {
         hello_ok_ = false;
-        SendText("{\"type\":\"hello\",\"version\":1,\"device_id\":\"" + id_ +
-                 "\",\"chat_enabled\":true}");
+        cJSON *hello = cJSON_CreateObject();
+        cJSON_AddStringToObject(hello, "type", "hello");
+        cJSON_AddNumberToObject(hello, "version", 1);
+        cJSON_AddStringToObject(hello, "device_id", id_.c_str());
+        cJSON_AddStringToObject(hello, "api_key", api_key_.c_str());
+        cJSON_AddBoolToObject(hello, "chat_enabled", true);
+        char *hello_raw = cJSON_PrintUnformatted(hello);
+        ESP_LOGI(kTag,
+                 "Sending hello: device_id=%s api_key_configured=%d bytes=%u",
+                 id_.c_str(), !api_key_.empty(),
+                 hello_raw ? static_cast<unsigned>(strlen(hello_raw)) : 0U);
+        if (!hello_raw || !SendText(hello_raw))
+          ESP_LOGW(kTag, "Failed to send hello");
+        cJSON_free(hello_raw);
+        cJSON_Delete(hello);
         for (int i = 0; i < 40 && !hello_ok_ && ws_->IsConnected(); ++i)
           vTaskDelay(pdMS_TO_TICKS(50));
+        ESP_LOGI(kTag, "Hello wait finished: ok=%d connected=%d failed=%d",
+                 hello_ok_.load(), ws_->IsConnected(), session_failed_.load());
+        if (!hello_ok_ && auth_error_received_.exchange(false) &&
+            !auth_error_notified_.exchange(true)) {
+          app_.Schedule([]() {
+            Application::GetInstance().GetIntercom().MarkAuthError();
+          });
+        }
         if (hello_ok_) {
           backoff = 1;
           SetState(State::Ready);
