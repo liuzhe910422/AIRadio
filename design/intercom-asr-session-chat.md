@@ -270,3 +270,9 @@ Go实际接口测试与固件编译作为实现检查，触摸、声音、繁忙
 hello注册成功并发送hello_ack后，为设备恢复的当前房间生成member_online事件，包含默认房间和每次断线重连。同房间在线设备（含上线者）收到文字记录，TTS启用时随后收到语音更新。其他房间不收到。返回默认房间也作为member_joined通知；重复加入当前房间不重复生成加入事件。
 
 联调日志包含room notice created/skipped、tts_enabled、TTS queued/started/completed/failed；chat_disabled表示目标未协商chat_enabled，不能接收聊天记录和自动播报。加入普通房间只通知该房间成员，留在默认房间的设备不会收到它的加入通报。
+
+## 15. 实时接收缓冲溢出收尾
+
+实时接收日志出现 `Receive jitter buffer full` 时，当前段音频已无法完整播放。固件保留 message_id，标记溢出并丢弃后续音频；收到同段 end／abort 后重置解码器并执行播放收尾，避免因提前清空消息ID而忽略结束消息、一直停留在“说话中”。未收到结束消息时使用已有接收超时保护。
+
+此修复只影响实时播放收尾；服务端的完整上传、ASR与临时聊天记录仍独立处理。服务端end_ack／receivers不保证接收设备播放完整；收到聊天文字也不能证明实时音频全部播放成功。
