@@ -21,16 +21,20 @@
 ## 2. 系统职责
 
 ```text
-                          灵矽／小智语音通道
-                       （自然语言、MCP、OTA）
-                                  ^
-                                  | 直接连接
-AIRadio 终端（固件 MCP、屏幕、大按钮） <----> 独立 Go 对讲服务 <----> 同房间在线设备
-       |                                      |\
-       |                                      | HTTP 控制台／SQLite
-       |                                      | ASR／TTS／托管 LLM
-       +---------- WebSocket / Opus ----------+
+                         灵矽／小智语音通道
+                  语音识别 · TTS · MCP 工具调用
+                         ▲                 ▲
+                         │ 直接连接         │ 直接连接
+真实 AIRadio 设备 A ──────┼───┐       ┌─────┼────── 真实 AIRadio 设备 B
+ ESP32-S3 · 大按钮       │   │       │   │       ESP32-S3 · 扬声器
+                         │   ▼       ▼   │
+                         └── 独立 Go Intercom Service ──┘
+                             房间 · 成员 · Opus 路由
+                             记录 · SQLite · 控制台
+                                      │
+                         异步 ASR · Hosting LLM · TTS
 ```
+
 
 架构边界需要特别明确：**AIRadio 终端直接连接灵矽（小智）语音通道完成语音交互和 MCP 工具调用，不经过 Intercom Service；Intercom Service 只负责设备之间的实时对讲、房间与成员、临时记录和 AI 服务调度。** 小智助手会话与对讲 WebSocket 独立，结束一次助手会话不会断开对讲连接。固件 `main/intercom/` 负责对讲连接、房间状态、录放音协调和临时记录；`Application` 统一调度应用状态，`AudioService` 提供共享音频能力；3.5B 显示层只展示状态并提交操作。
 
