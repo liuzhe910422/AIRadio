@@ -47,7 +47,7 @@ public:
                   const std::vector<std::string> &invite_ids);
   bool JoinRoom(const std::string &code);
   bool LeaveRoom();
-  bool AcceptInvite(const std::string &code);
+  bool AcceptInvite();
   std::string ListRooms();
   // Room picker state is owned by the Application task.
   const std::vector<IntercomRoomOption> &RoomOptions() const {
@@ -57,9 +57,12 @@ public:
   bool RoomPickerPending() const { return !room_picker_pending_.empty(); }
   int RoomPickerSeconds() const;
   const std::string &RoomPickerError() const { return room_picker_error_; }
+  bool HasPendingInvite() const { return !pending_invite_code_.empty(); }
   uint32_t RoomPickerRevision() const { return room_picker_revision_; }
   void SelectRoom(const std::string &id);
   void CloseRoomPicker();
+  bool AuthError() const { return auth_error_; }
+  void MarkAuthError() { auth_error_ = true; }
   // Called by MCP on the Application task; caller owns the returned JSON.
   struct cJSON *GetSessionTranscript() const;
   // UI access and controls run on Application's task only.
@@ -77,9 +80,12 @@ private:
   std::atomic<uint32_t> room_picker_generation_{0};
   uint32_t room_picker_revision_ = 0;
   bool room_picker_visible_ = false;
+  std::atomic<bool> auth_error_{false};
   int64_t room_picker_deadline_ = 0;
   std::string room_picker_pending_;
   std::string room_picker_error_;
+  std::string pending_invite_code_;
+  std::string pending_invite_room_name_;
   enum class State {
     Disabled,
     Disconnected,
@@ -114,6 +120,7 @@ private:
   std::atomic<bool> record_task_active_{false};
   std::string id_;
   std::string url_;
+  std::string api_key_;
   std::string room_name_ = "默认房间";
   std::string message_id_;
   std::string incoming_id_;
@@ -126,6 +133,8 @@ private:
   std::atomic<int64_t> playback_started_at_{0};
   std::atomic<int64_t> playback_ended_at_{0};
   std::atomic<bool> hello_ok_{false};
+  std::atomic<bool> auth_error_notified_{false};
+  std::atomic<bool> auth_error_received_{false};
   std::atomic<bool> start_ok_{false};
   std::atomic<bool> end_ok_{false};
   std::atomic<bool> end_pending_{false};

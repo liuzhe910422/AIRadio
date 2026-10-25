@@ -208,7 +208,7 @@ func TestDeviceCanCreateRoom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(r.JoinCode) != 6 || r.Name != "语音创建" {
+	if len(r.JoinCode) != 4 || r.JoinCode[0] < '1' || r.JoinCode[0] > '9' || r.Name != "语音创建" {
 		t.Fatalf("room = %+v", r)
 	}
 	if got := s.store.CurrentRoom("creator"); got.ID != r.ID {

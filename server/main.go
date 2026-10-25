@@ -32,6 +32,7 @@ const (
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 type control struct {
+	APIKey          string        `json:"api_key,omitempty"`
 	DeviceType      string        `json:"device_type,omitempty"`
 	Enabled         *bool         `json:"enabled,omitempty"`
 	ChatEnabled     bool          `json:"chat_enabled,omitempty"`
@@ -179,6 +180,9 @@ type server struct {
 	saveWAV       bool
 	recordDir     string
 	store         roomStore
+	authMu        sync.RWMutex
+	authEnabled   bool
+	authKey       string
 }
 
 func newServer() *server {
@@ -455,6 +459,17 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.chatEnabled = hello.ChatEnabled
+	s.authMu.RLock()
+	authEnabled, authKey := s.authEnabled, s.authKey
+	s.authMu.RUnlock()
+	if authEnabled && hello.APIKey != authKey {
+		log.Printf("intercom hello rejected device=%s reason=invalid api key", hello.DeviceID)
+		conn.WriteJSON(answer("hello_ack", "", false, "invalid intercom api key"))
+		// Give the device time to receive the diagnostic ack before closing the
+		// unauthenticated connection. This is only a development-mode error path.
+		time.Sleep(100 * time.Millisecond)
+		return
+	}
 	if hello.Type != "hello" || hello.Version != 1 || s.register(p, hello.DeviceID) != nil {
 		log.Printf("debug ws hello rejected remote=%s", r.RemoteAddr)
 		conn.WriteJSON(answer("hello_ack", "", false, "invalid version or device_id"))
@@ -658,6 +673,7 @@ func main() {
 	s.loadASRConfig()
 	s.loadTTSConfig()
 	s.loadHostingConfig()
+	s.loadIntercomAuthConfig()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go s.chat.run(ctx, s)

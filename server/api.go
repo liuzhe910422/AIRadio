@@ -267,6 +267,8 @@ func (a *apiServer) handler(w http.ResponseWriter, r *http.Request) {
 		a.hostingTest(w, r)
 	case r.URL.Path == "/api/hosting/config":
 		a.hostingConfig(w, r)
+	case r.URL.Path == "/api/intercom/auth/config":
+		a.intercomAuthConfig(w, r)
 	case r.URL.Path == "/api/tts/config":
 		a.ttsConfig(w, r)
 	case r.URL.Path == "/api/tts/test":

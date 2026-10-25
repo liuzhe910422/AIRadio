@@ -567,6 +567,10 @@
                     <label for="intercom_server_url">Intercom server URL:</label>
                     <input type="url" id="intercom_server_url" name="intercom_server_url" maxlength="255" placeholder="ws://192.168.1.10:8080/ws" autocomplete="off">
                 </p>
+                <p>
+                    <label for="intercom_api_key">Intercom API key:</label>
+                    <input type="text" id="intercom_api_key" name="intercom_api_key" maxlength="256" autocomplete="off">
+                </p>
 
                 <!-- Max TX Power -->
                 <p class="field-inline">
@@ -1674,6 +1678,7 @@
                 ota_url: document.getElementById('ota_url').value,
                 intercom_device_id: document.getElementById('intercom_device_id').value.trim(),
                 intercom_server_url: document.getElementById('intercom_server_url').value.trim(),
+                intercom_api_key: document.getElementById('intercom_api_key').value,
                 max_tx_power: parseInt(document.getElementById('max_tx_power').value),
                 remember_bssid: document.getElementById('remember_bssid').checked,
                 sleep_mode: document.getElementById('sleep_mode').checked
@@ -1756,6 +1761,7 @@
                 }
                 document.getElementById('intercom_device_id').value = data.intercom_device_id || '';
                 document.getElementById('intercom_server_url').value = data.intercom_server_url || '';
+                document.getElementById('intercom_api_key').value = data.intercom_api_key || '';
                 if (data.max_tx_power) {
                     document.getElementById('max_tx_power').value = data.max_tx_power;
                 }

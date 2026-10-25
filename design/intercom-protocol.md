@@ -11,6 +11,7 @@
 - 管理 HTTP 接口需要 Cookie `airadio_admin`。登录成功后服务端设置该 Cookie。每次登录创建独立随机会话，有效期12小时，最多128个会话；达到上限返回429。Cookie 使用 Path=/、HttpOnly、SameSite=Strict，直接 HTTPS 请求下启用 Secure。
 - JSON 使用 UTF-8。成功响应通常为 JSON；失败响应为 HTTP 状态码和纯文本错误正文。
 - `device_id` 必须匹配 `[A-Za-z0-9_-]{1,32}`，且在线连接不能重复。
+- 普通房间加入码为 `1000`～`9999` 的四位数字字符串；默认房间没有加入码。
 - 默认房间 ID 为 `default`，名称为“默认房间”，不能关闭。
 
 ## 2. HTTP 接口
@@ -44,7 +45,7 @@
 |---|---|---|
 | `id` / `ID` | string | 稳定房间 ID |
 | `name` | string | 房间名称 |
-| `join_code` / `JoinCode` | string | 普通房间六位数字加入码；默认房间为空 |
+| `join_code` / `JoinCode` | string | 普通房间四位数字加入码（1000～9999，不使用前导零）；默认房间为空 |
 | `is_default` / `Default` | boolean | 是否默认房间 |
 | `device_ids` / `Devices` | string[] | 存储维护的实际成员；默认房间成员请通过设备接口按 room_id 查询 |
 | `invite_device_ids` | string[] | 邀请名单，空表示开放加入 |
@@ -62,7 +63,7 @@
 | `created_by_device_id` | string | 否 | 创建者标识，记录到房间 |
 | `device_ids` | string[] | 否 | 邀请设备列表；为空表示开放加入，不自动移动受邀设备 |
 
-成功：`200`，返回单个房间对象（字段同 `GET /api/rooms`）。普通房间会生成固定六位加入码。指定的创建者自动加入；邀请不自动切换受邀设备。HTTP 创建当前读取 device_ids；WebSocket 创建优先读取 invite_device_ids。
+成功：`200`，返回单个房间对象（字段同 `GET /api/rooms`）。普通房间会生成固定四位加入码（1000～9999）。指定的创建者自动加入；邀请不自动切换受邀设备。HTTP 创建当前读取 device_ids；WebSocket 创建优先读取 invite_device_ids。
 
 失败：`400`，正文为 `name is required` 等错误。
 
@@ -151,7 +152,7 @@
 | `receivers` | integer | end_ack 实际确认接收者数 |
 | `room_id` | string | 房间 ID |
 | `room_name` | string | 房间名称 |
-| `code` | string | 房间六位加入码 |
+| `code` | string | 房间四位加入码（1000～9999） |
 | `name` | string | 创建房间名称 |
 | `device_ids` | string[] | 创建房间时的成员列表 |
 
@@ -172,7 +173,7 @@
 成功：
 
 ```json
-{"type":"create_room_ack","ok":true,"room_id":"room-...","room_name":"房间002","code":"111696","device_ids":["003"],"invite_device_ids":["004"]}
+{"type":"create_room_ack","ok":true,"room_id":"room-...","room_name":"房间002","code":"1234","device_ids":["003"],"invite_device_ids":["004"]}
 ```
 
 创建者自动进入新房间。服务端会向受影响的在线设备发送 `room_state`。
@@ -182,10 +183,10 @@
 客户端 -> 服务端：
 
 ```json
-{"type":"join_room","code":"111696"}
+{"type":"join_room","code":"1234"}
 ```
 
-`code` 为六位加入码。正在发言时切换会返回 `ok:false,error:"busy"`。
+`code` 为四位加入码（1000～9999）。正在发言时切换会返回 `ok:false,error:"busy"`。
 
 成功：
 
@@ -319,14 +320,14 @@
 
 - 邀请列表为空：房间开放加入，任意设备可使用加入码申请加入。
 - 邀请列表非空：只有列表中的设备可以加入；在线受邀设备收到 `room_invite`，不会自动切换房间。
-- 设备接受邀请后发送 `accept_room_invite`，服务端校验后切换活动房间。
+- 设备接受邀请后发送 `accept_room_invite`，服务端校验后切换活动房间。固件保存最近一次邀请的房间和加入码，`self.intercom.accept_room_invite` 无输入参数即可接受；请求发送成功后清除待处理邀请码，没有邀请时返回 false，新邀请会覆盖旧邀请。
 
 ```json
-{"type":"room_invite","room_id":"room-abc","room_name":"房间002","code":"123456","source_id":"003"}
+{"type":"room_invite","room_id":"room-abc","room_name":"房间002","code":"1234","source_id":"003"}
 ```
 
 ```json
-{"type":"accept_room_invite","code":"123456"}
+{"type":"accept_room_invite","code":"1234"}（由固件自动使用最近邀请发送）
 ```
 
 成功返回 `accept_room_invite_ack`，随后发送 `room_state`。`room_state` 也用于通知房间名称编辑；仅名称更新不重置聊天视图。实际切换时携带新的 chat_session_id。
@@ -362,7 +363,7 @@
 | rooms[].is_default | boolean | 是否默认房间 |
 | rooms[].is_current | boolean | 本机当前是否处于此房间 |
 | rooms[].can_join | boolean | 是否允许本机加入；当前返回的房间均为 true |
-| rooms[].code | string | 六位加入码，保留前导零；默认房间为空字符串 |
+| rooms[].code | string | 四位加入码（1000～9999），不使用前导零；默认房间为空字符串 |
 
 服务端只返回默认房间、开放房间、本机创建或本机受邀房间，避免泄露其它受限房间加入码。响应最大 8192 字节，超出时返回 ok:false 和错误原因，不静默截断。请求控制帧仍限制 1024 字节。
 

@@ -59,9 +59,11 @@ sequenceDiagram
 | `self.intercom.create_room` | `name` 必填字符串；`invite_device_ids` 可选字符串，默认空 | `CreateRoom()` | bool，仅表示请求发送是否成功 |
 | `self.intercom.join_room` | `code` 必填字符串 | `JoinRoom()` | bool，仅表示请求发送是否成功 |
 | `self.intercom.leave_room` | 无 | `LeaveRoom()` | bool，仅表示请求发送是否成功 |
-| `self.intercom.accept_room_invite` | `code` 必填字符串 | `AcceptInvite()` | bool，仅表示请求发送是否成功 |
+| `self.intercom.accept_room_invite` | 无参数 | `AcceptInvite()` | 使用最近一次邀请的加入码发送请求；无待处理邀请返回 false |
 
 工具结果通过现有 `McpTool::Call()` / `ReplyResult()` 返回。列表 JSON 是文本内容中的字符串，模型需要读取其中的 `ok`，不能把收到 MCP 成功响应等同于业务成功。
+
+`self.intercom.accept_room_invite` 不接收参数。设备收到 `room_invite` 控制帧后保存最近一次邀请的房间名称、房间 ID和四位加入码；用户明确同意最近邀请时调用该工具，固件自动发送对应 `accept_room_invite`。请求成功发送后清除待处理邀请码，服务端业务确认仍通过 `accept_room_invite_ack`／`room_state` 返回。没有待处理邀请时返回 false；发送失败或服务端拒绝时不应向用户宣称已加入，重新收到新邀请后覆盖旧邀请。该工具不根据用户口述的数字选择历史邀请。
 
 ### 当前房间查询
 
@@ -82,7 +84,7 @@ sequenceDiagram
 5. 网络回调收到 `list_rooms_ack` 后比较 `request_id`，保存原始响应并唤醒条件变量。
 6. 最多等待 5 秒，超时清除请求标识，迟到响应不会匹配后续查询。
 
-3.5B收到有效列表后在应用任务创建15秒倒计时选房弹窗，列表显示房间名称及其后的加入码（保留前导零），默认房间仅显示名称，并高亮当前房间。点击通过现有join_room／leave_room申请切房，等待服务端确认后关闭；支持手动关闭、超时关闭、忙碌提示及断线清理。MCP输入与返回JSON不变，其它板型不显示该弹窗。关闭窗口不撤销已经发送的请求。
+3.5B收到有效列表后在应用任务创建15秒倒计时选房弹窗，列表显示房间名称及其后的加入码（范围1000～9999，不使用前导零），默认房间仅显示名称，并高亮当前房间。点击通过现有join_room／leave_room申请切房，等待服务端确认后关闭；支持手动关闭、超时关闭、忙碌提示及断线清理。MCP输入与返回JSON不变，其它板型不显示该弹窗。关闭窗口不撤销已经发送的请求。
 
 失败原因包括：`intercom disconnected`、`room query busy`、`room query timed out`。对讲服务端限制完整响应不超过 8192 字节，固件文本接收也限制 8192 字节。
 
@@ -96,7 +98,7 @@ MCP 参数示例：
 {"name":"临时调度组","invite_device_ids":"003,004"}
 ```
 
-MCP 当前仅支持字符串属性，邀请 ID 用英文逗号切分后转换成 WebSocket 数组。ID 前导零要保留；当前解析不会自动去除各 ID 周围空格，调用端应传 `003,004`，避免 `003, 004`。
+MCP 当前仅支持字符串属性，邀请 ID 用英文逗号切分后转换成 WebSocket 数组。设备 ID 保留原有格式；当前解析不会自动去除各 ID 周围空格，调用端应传 `003,004`，避免 `003, 004`。
 
 ```json
 {"type":"create_room","name":"临时调度组","creator_device_id":"002","invite_device_ids":["003","004"]}
@@ -107,7 +109,7 @@ MCP 当前仅支持字符串属性，邀请 ID 用英文逗号切分后转换成
 ### 加入、退出和接受邀请
 
 ```json
-{"type":"join_room","code":"012345"}
+{"type":"join_room","code":"1234"}
 ```
 
 ```json
@@ -115,10 +117,10 @@ MCP 当前仅支持字符串属性，邀请 ID 用英文逗号切分后转换成
 ```
 
 ```json
-{"type":"accept_room_invite","code":"012345"}
+{"type":"accept_room_invite","code":"1234"}（由固件自动使用最近邀请发送）
 ```
 
-`code` 使用字符串保留前导零。退出回默认房间。服务端校验房间有效性、邀请权限等条件；固件当前不等待这些操作的 ack。
+`code` 使用四位数字字符串（1000～9999），不使用前导零。退出回默认房间。服务端校验房间有效性、邀请权限等条件；固件当前不等待这些操作的 ack。
 
 按名称切房没有独立工具：可以先查询房间列表，唯一匹配后使用返回的 code 加入；同名时询问用户。默认房间用 `leave_room` 返回。
 

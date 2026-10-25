@@ -596,8 +596,10 @@ void WifiConfigurationAp::StartWebServer() {
         if (intercom_err == ESP_OK) {
           char device_id[33] = {};
           char server_url[256] = {};
+          char api_key[257] = {};
           size_t device_id_size = sizeof(device_id);
           size_t server_url_size = sizeof(server_url);
+          size_t api_key_size = sizeof(api_key);
           esp_err_t id_err = nvs_get_str(intercom_nvs, "device_id", device_id,
                                          &device_id_size);
           if (id_err == ESP_OK) {
@@ -608,6 +610,10 @@ void WifiConfigurationAp::StartWebServer() {
           if (url_err == ESP_OK) {
             cJSON_AddStringToObject(json, "intercom_server_url", server_url);
           }
+          esp_err_t key_err = nvs_get_str(intercom_nvs, "api_key", api_key,
+                                          &api_key_size);
+          if (key_err == ESP_OK)
+            cJSON_AddStringToObject(json, "intercom_api_key", api_key);
           ESP_LOGI(
               TAG,
               "Intercom config read: device_id=%s (len=%u), "
@@ -689,10 +695,12 @@ void WifiConfigurationAp::StartWebServer() {
 
         cJSON *intercom_id = cJSON_GetObjectItem(json, "intercom_device_id");
         cJSON *intercom_url = cJSON_GetObjectItem(json, "intercom_server_url");
+        cJSON *intercom_key = cJSON_GetObjectItem(json, "intercom_api_key");
         ESP_LOGI(TAG, "Intercom config submit: id_field=%d, url_field=%d",
                  intercom_id != nullptr, intercom_url != nullptr);
-        if (intercom_id || intercom_url) {
-          if (!cJSON_IsString(intercom_id) || !cJSON_IsString(intercom_url)) {
+        if (intercom_id || intercom_url || intercom_key) {
+          if (!cJSON_IsString(intercom_id) || !cJSON_IsString(intercom_url) ||
+              !cJSON_IsString(intercom_key)) {
             cJSON_Delete(json);
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                                 "Invalid intercom configuration");
@@ -700,13 +708,14 @@ void WifiConfigurationAp::StartWebServer() {
           }
           std::string id = intercom_id->valuestring;
           std::string url = intercom_url->valuestring;
+          std::string api_key = intercom_key->valuestring;
           ESP_LOGI(TAG,
                    "Intercom config submit: device_id_len=%u, "
                    "server_url_len=%u, ws_scheme=%d",
                    static_cast<unsigned>(id.size()),
                    static_cast<unsigned>(url.size()),
                    url.rfind("ws://", 0) == 0);
-          if (id.empty() != url.empty() ||
+          if (api_key.size() > 256 || id.empty() != url.empty() ||
               (!id.empty() &&
                (!ValidIntercomId(id) || !ValidIntercomUrl(url)))) {
             cJSON_Delete(json);
@@ -724,6 +733,10 @@ void WifiConfigurationAp::StartWebServer() {
             if (save_err == ESP_OK) {
               save_stage = "server_url";
               save_err = nvs_set_str(intercom_nvs, "server_url", url.c_str());
+            }
+            if (save_err == ESP_OK) {
+              save_stage = "api_key";
+              save_err = nvs_set_str(intercom_nvs, "api_key", api_key.c_str());
             }
             if (save_err == ESP_OK) {
               save_stage = "commit";
