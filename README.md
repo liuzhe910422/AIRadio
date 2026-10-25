@@ -25,6 +25,13 @@ AIRadio gives each action the right interface: **a large button for instant spee
 
 Product page: [Open the AIRadio home page](http://154.94.238.56/).
 
+## Project video
+
+- Direct download: [http://154.94.238.56/video/ready.mp4](http://154.94.238.56/video/ready.mp4)
+- The video file is relatively large. Download it before watching for a smoother experience.
+- Baidu Netdisk backup: [10月25日(1).mp4](https://pan.baidu.com/s/1T_n8MzPlYifnVEFZb5InGw)
+- Extraction code: `hty9`
+
 > The demo site currently uses HTTP. Some browsers may show a privacy or security warning. After confirming the address is `154.94.238.56`, choose the browser option to continue, proceed, or allow the page to open.
 
 ## Architecture
