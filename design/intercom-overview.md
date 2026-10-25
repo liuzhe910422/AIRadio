@@ -4,7 +4,7 @@
 
 ## 1. 产品与当前能力
 
-项目基于小智固件实现 AI 对讲机，面向车队、调度和临时协作。目前主要适配 Waveshare ESP32-S3 Touch LCD 3.5B，使用 480×320 横屏。用户点击大按钮开始实时对讲，再次点击结束；房间操作主要通过小智语音 MCP 完成。
+项目基于小智固件实现 AI 对讲机，面向车队、调度和临时协作。目前主要适配 Waveshare ESP32-S3 Touch LCD 3.5B，使用 480×320 横屏。用户点击大按钮开始实时对讲，再次点击结束；房间操作主要通过灵矽（小智）语音通道提供的 MCP 工具完成。
 
 | 能力 | 当前实现 |
 | --- | --- |
@@ -21,18 +21,20 @@
 ## 2. 系统职责
 
 ```text
-用户语音 <-> 小智／linxd（助手、MCP 调用、OTA）
-                      |
-                  固件 MCP
-                      |
-设备 Intercom <-> 独立 Go 服务 <-> 同房间在线设备
-                      |
-        HTTP 控制台、SQLite、ASR／TTS／托管 LLM
+                          灵矽／小智语音通道
+                       （自然语言、MCP、OTA）
+                                  ^
+                                  | 直接连接
+AIRadio 终端（固件 MCP、屏幕、大按钮） <----> 独立 Go 对讲服务 <----> 同房间在线设备
+       |                                      |\
+       |                                      | HTTP 控制台／SQLite
+       |                                      | ASR／TTS／托管 LLM
+       +---------- WebSocket / Opus ----------+
 ```
 
-小智通道与对讲 WebSocket 独立。结束一次助手会话不会断开对讲连接。固件 `main/intercom/` 负责连接、房间状态、录放音协调和临时记录；`Application` 统一调度应用状态，`AudioService` 提供共享音频能力；3.5B 显示层只展示状态和提交操作。
+架构边界需要特别明确：**AIRadio 终端直接连接灵矽（小智）语音通道完成语音交互和 MCP 工具调用，不经过 Intercom Service；Intercom Service 只负责设备之间的实时对讲、房间与成员、临时记录和 AI 服务调度。** 小智助手会话与对讲 WebSocket 独立，结束一次助手会话不会断开对讲连接。固件 `main/intercom/` 负责对讲连接、房间状态、录放音协调和临时记录；`Application` 统一调度应用状态，`AudioService` 提供共享音频能力；3.5B 显示层只展示状态并提交操作。
 
-Go 服务在同一进程提供管理 HTTP API、设备控制与音频转发。ASR、TTS 和托管 LLM 使用独立有界任务队列，失败不应阻塞实时对讲；第三方密钥只在服务端使用。详细实现见[ASR 与会话记录](intercom-asr-session-chat.md)、[托管模式](intercom-hosting.md)。
+Go 服务在同一进程提供管理 HTTP API、设备控制与音频转发。ASR、TTS 和托管 LLM 使用独立有界任务队列，失败不应阻塞实时对讲；第三方密钥只在服务端使用。详细实现见[ASR 与会话记录](intercom-asr-session-chat.md)、[托管模式](intercom-hosting.md)。产品展示页和架构图见仓库根目录 README 与 [`homeweb/`](../homeweb/)。
 
 ## 3. 身份、账户与持久化
 
