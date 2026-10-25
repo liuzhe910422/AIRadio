@@ -23,7 +23,9 @@ AIRadio gives each action the right interface: **a large button for instant spee
 - **Clear field-ready status**: manual mode uses a blue button and hosting mode uses yellow, while room, speaker, and system events remain visible.
 - **Console and simulator**: the Go service includes device and room management, a browser Opus simulator, and ASR, TTS, and hosting-LLM configuration and test APIs.
 
-Product page: [Open the AIRadio home page](homeweb/index.html).
+Product page: [Open the AIRadio home page](http://154.94.238.56/).
+
+> The demo site currently uses HTTP. Some browsers may show a privacy or security warning. After confirming the address is `154.94.238.56`, choose the browser option to continue, proceed, or allow the page to open.
 
 ## Architecture
 
