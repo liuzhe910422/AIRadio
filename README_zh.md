@@ -83,6 +83,7 @@ python3 scripts/build.py waveshare/esp32-s3-touch-lcd-3.5b --name default
 - [AI 托管模式](design/intercom-hosting.md)
 - [MCP 工具实现](design/intercom-mcp-implementation.md)
 - [480×320 界面方案](design/intercom-ui-480x320.md)
+- [项目评审说明与设计取舍](design/evaluation-guide.md)
 
 ## 开源许可
 

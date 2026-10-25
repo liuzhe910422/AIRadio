@@ -83,6 +83,7 @@ Use the exact board name printed by `--list-boards`. After flashing, configure t
 - [AI hosting mode](design/intercom-hosting.md)
 - [MCP implementation](design/intercom-mcp-implementation.md)
 - [480×320 UI](design/intercom-ui-480x320.md)
+- [Evaluation guide and design trade-offs](design/evaluation-guide.md)
 
 ## License
 
