@@ -14,7 +14,7 @@
 
 ## 2. 第一阶段代码基础
 
-- 目标板在 `config.h` 中启用了 `TOUCH_ENABLE`，`InitializeTouch()` 已将触摸设备注册到 LVGL。当前板级实现使用 AXS15231B 触摸驱动，实际控制器仍需实机确认。
+- 目标板在 `config.h` 中启用了 `TOUCH_ENABLE`，`InitializeTouch()` 已将触摸设备注册到 LVGL。当前板级实现使用 AXS15231B 触摸驱动，已在目标设备上完成触摸联调确认。
 - BOOT 键单击调用 `Application::ToggleChatState()`；第一版保留该助手操作。
 - `AudioService` 已有 16 kHz 单声道、60 ms 一帧的 Opus 编解码任务。其发送和播放队列有容量限制，不能存整段录音。
 - Wi-Fi 配网页面由 `78__esp-wifi-connect` 提供，已有“高级设置”页签和 `/advanced/config`、`/advanced/submit` 接口。固件的 `Settings` 可读写 NVS；对讲配置加入现有页面，不复用 linxd 的 `websocket` 设置。

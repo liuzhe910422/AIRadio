@@ -76,9 +76,6 @@ Use the exact board name printed by `--list-boards`. After flashing, configure t
 - [AI hosting mode](design/intercom-hosting.md)
 - [MCP implementation](design/intercom-mcp-implementation.md)
 - [480×320 UI](design/intercom-ui-480x320.md)
-- [Custom board guide](docs/custom-board.md)
-- [WebSocket protocol](docs/websocket.md)
-- [MQTT + UDP protocol](docs/mqtt-udp.md)
 
 ## License
 
