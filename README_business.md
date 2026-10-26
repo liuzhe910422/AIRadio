@@ -2,7 +2,7 @@
 
 [返回项目首页](README_zh.md) · [English overview](README.md) · [AI 元素与产品体验](README_ai.md)
 
-比赛配套材料：[产品场景与内部验收](design/product-validation.md) · [商业可行性与成本假设](design/business-case.md)。材料适配三天赛制，明确区分已实现能力、待执行验收与尚未验证的客户收益。
+配套材料：[产品场景与内部验收](design/product-validation.md) · [司机场景的效率与安全价值](design/business-case.md)。我们通过具体工作流程介绍产品设计、协作效率和作业安全。
 
 > **让每一次现场对讲，都成为 AI 帮助团队提高协作效率的入口。**
 
