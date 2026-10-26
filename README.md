@@ -1,10 +1,12 @@
-# Lingxi AIRadio: AI Intercom for Industry Operations
+# Lingxi AIRadio: AI Intercom That Understands, Recalls, and Helps Respond
 
 ([English](README.md) | [中文](README_zh.md) | [日本語](README_ja.md))
 
 <p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="Lingxi AIRadio system architecture" width="900"></p>
 
 Lingxi AIRadio is an industry intercom solution built on the Lingxi/XiaoZhi voice channel and ESP32 firmware. It is designed for fleets, logistics parks, warehouses, and temporary field teams. AIRadio combines real-time half-duplex voice, voice-controlled rooms, online AI hosting, and short-term conversation recall in one workflow.
+
+**An AI collaboration interface for frontline teams:** tap to reach a colleague, speak to manage a room, and ask AI to recall recent communication or help respond while people are busy. Everyday radio traffic becomes information that can be reviewed, summarized, and understood by AI.
 
 > **Built on real hardware:** this project is more than a browser or virtual-device demo. The current feature set has been flashed onto and field-tested with a Waveshare ESP32-S3 Touch LCD 3.5B. After flashing the firmware and configuring the intercom service URL, the physical device provides the touch talk button, real-time intercom, voice room operations, ASR records, and AI hosting. The browser simulator is only an auxiliary tool for service and protocol validation.
 
@@ -15,6 +17,13 @@ Lingxi AIRadio is an industry intercom solution built on the Lingxi/XiaoZhi voic
 Drivers, warehouse operators, and field workers often have both hands occupied. A conventional radio is fast but still requires separate devices and manual room management. A voice assistant is flexible, but is not the right trigger for an urgent, immediate transmission.
 
 AIRadio gives each action the right interface: **a large button for instant speech, voice for multi-step operations, and AI assistance when a person cannot respond immediately.** Teams can talk quickly, switch groups with less friction, and revisit what was just said.
+
+## Product guides
+
+| Guide | Contents |
+|---|---|
+| [Business value (Chinese)](README_business.md) | Why the product matters, why customers would pay, and the path from device delivery to ongoing services |
+| [AI elements and product experience (Chinese)](README_ai.md) | How AI helps with device operations, missed information, conversation review, and responses while people are busy |
 
 ## Key capabilities
 
@@ -55,6 +64,8 @@ The audio path is `microphone → 16 kHz mono Opus → WebSocket → same-room d
 
 The main target is Waveshare ESP32-S3 Touch LCD 3.5B. Devices retain up to 20 recent records, while temporary audio and text are kept in server memory. Device account binding, multi-organization roles, offline replay, permanent history, and cross-instance routing are not implemented yet. Device and replay endpoints are intended for trusted integration environments. Hosting requires ASR, TTS, and the Hosting LLM to be enabled and the device to remain online.
 
+Rooms currently share a global speaking lock and cannot transmit concurrently. The record limit includes system messages; summaries cover only retained, recognized text. Hosting has no external business tools, long-term memory, or offline answering, and cannot confirm that a business action has been executed. Commercial delivery still requires network, acoustic, hardware, security, and operational validation.
+
 ## Quick start
 
 ### Run the intercom service
@@ -81,6 +92,7 @@ The recommended real device is the Waveshare ESP32-S3 Touch LCD 3.5B with a 480�
 
 ## Documentation
 
+- [Industry landscape and business value: sources, scenarios, costs, and pilot metrics (Chinese)](design/intercom-industry-and-business-value.md)
 - [Architecture overview](design/intercom-overview.md)
 - [Intercom protocol](design/intercom-protocol.md)
 - [ASR and session records](design/intercom-asr-session-chat.md)
