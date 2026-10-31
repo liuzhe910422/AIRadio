@@ -6,6 +6,8 @@
 #include "config.h"
 #include "lcd_display.h"
 #include "settings.h"
+#include "lvgl_image.h"
+#include "jpg/jpeg_to_image.h"
 
 #include <cstring>
 #include <string>
@@ -18,6 +20,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <esp_heap_caps.h>
 
 #define TAG "CustomLcdDisplay"
 
@@ -25,6 +28,11 @@ static SemaphoreHandle_t trans_done_sem = NULL;
 static uint16_t *trans_act;
 static uint16_t *trans_buf_1;
 static uint16_t *trans_buf_2;
+
+struct IntercomImageLink {
+  CustomLcdDisplay *display;
+  std::string url;
+};
 
 static bool English(const Intercom &intercom) { return intercom.Language() == "en-US"; }
 static const char *StatusText(const Intercom &intercom) {
@@ -327,6 +335,58 @@ void CustomLcdDisplay::SetChatMessage(const char *role, const char *content) {
   Unlock();
 }
 
+void CustomLcdDisplay::ShowIntercomImage(const std::string &url, bool popup) {
+  if (url.empty()) return;
+  struct Job { CustomLcdDisplay *display; std::string url; bool popup; };
+  auto *job = new Job{this, url, popup};
+  if (xTaskCreate([](void *arg) {
+        auto *job = static_cast<Job *>(arg);
+        auto http = Board::GetInstance().GetNetwork()->CreateHttp(4);
+        std::string source;
+        if (http && http->Open("GET", job->url)) source = http->ReadAll();
+        if (http) http->Close();
+        uint8_t *data = nullptr; size_t len = 0, w = 0, h = 0, stride = 0;
+        bool ok = !source.empty() && jpeg_to_image(reinterpret_cast<const uint8_t *>(source.data()), source.size(), &data, &len, &w, &h, &stride) == ESP_OK;
+        if (ok && job->display->Lock(1000)) {
+          auto host = job->popup ? lv_obj_create(lv_screen_active()) : job->display->chat_list_;
+          if (job->popup) {
+            lv_obj_set_size(host, 472, 312); lv_obj_center(host);
+          }
+          auto image = lv_image_create(host);
+          lv_obj_add_flag(image, LV_OBJ_FLAG_CLICKABLE);
+          auto *img = new LvglAllocatedImage(data, len, w, h, stride, LV_COLOR_FORMAT_RGB565);
+          lv_image_set_src(image, img->image_dsc()); lv_obj_center(image);
+          if (!job->popup) { lv_obj_set_width(image, 120); lv_obj_set_height(image, 90); }
+          lv_obj_add_event_cb(image, [](lv_event_t *e) { if (lv_event_get_code(e) == LV_EVENT_DELETE) delete static_cast<LvglImage *>(lv_event_get_user_data(e)); }, LV_EVENT_DELETE, img);
+          if (!job->popup) {
+            auto *link = new IntercomImageLink{job->display, job->url};
+            lv_obj_add_event_cb(image, [](lv_event_t *e) {
+              auto *link = static_cast<IntercomImageLink *>(lv_event_get_user_data(e));
+              if (lv_event_get_code(e) == LV_EVENT_CLICKED && link)
+                link->display->ShowIntercomImage(link->url, true);
+              if (lv_event_get_code(e) == LV_EVENT_DELETE) delete link;
+            }, LV_EVENT_ALL, link);
+          }
+          if (job->popup) {
+            auto close = lv_button_create(host);
+            lv_obj_set_size(close, 56, 44);
+            lv_obj_align(close, LV_ALIGN_TOP_RIGHT, -4, 4);
+            auto close_label = lv_label_create(close); lv_label_set_text(close_label, "X"); lv_obj_center(close_label);
+            lv_obj_add_event_cb(close, [](lv_event_t *e) {
+              if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+                auto popup = static_cast<lv_obj_t *>(lv_event_get_user_data(e));
+                if (popup) lv_obj_del(popup);
+              }
+            }, LV_EVENT_CLICKED, host);
+            lv_obj_move_foreground(host);
+            lv_obj_move_foreground(close);
+          }
+          job->display->Unlock();
+        } else if (data) heap_caps_free(data);
+        delete job; vTaskDelete(nullptr);
+      }, "image_dl", 8192, job, 2, nullptr) != pdPASS) delete job;
+}
+
 void CustomLcdDisplay::UpdateChatRecords() {
   if (!chat_list_)
     return;
@@ -365,6 +425,18 @@ void CustomLcdDisplay::UpdateChatRecords() {
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
     const bool english = English(intercom);
     const std::string sender = message.event_notification ? (english ? "Event" : "事件通知") : (message.system ? (english ? "Room notice" : "房间通知") : (message.own ? (english ? "Me" : "我") : message.source));
+    if (message.image) {
+      lv_label_set_text(label, (sender + (english ? " · Received an image" : " · 收到一张图片")).c_str());
+      ShowIntercomImage(message.image_url, false);
+      auto *message_link = new IntercomImageLink{this, message.image_url};
+      lv_obj_add_event_cb(button, [](lv_event_t *e) {
+        auto *link = static_cast<IntercomImageLink *>(lv_event_get_user_data(e));
+        if (lv_event_get_code(e) == LV_EVENT_CLICKED && link)
+          link->display->ShowIntercomImage(link->url, true);
+        if (lv_event_get_code(e) == LV_EVENT_DELETE) delete link;
+      }, LV_EVENT_ALL, message_link);
+      continue;
+    }
     std::string text = sender +
         " · " +
         (message.automated ? (english ? std::string("Hosted reply · ") : std::string("托管回复 · ")) : std::string()) +

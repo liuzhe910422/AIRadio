@@ -19,4 +19,9 @@ struct IntercomChatMessage {
   bool text_truncated = false;
   bool event_notification = false;
   bool event_terminal = false;
+  bool image = false;
+  std::string image_url;
+  std::string thumbnail_url;
+  int image_width = 0;
+  int image_height = 0;
 };

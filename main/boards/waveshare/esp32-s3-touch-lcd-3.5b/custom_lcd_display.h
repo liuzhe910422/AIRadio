@@ -13,6 +13,7 @@ public:
   void SetupUI() override;
   void SetChatMessage(const char *role, const char *content) override;
   void UpdateIntercom() override;
+  void ShowIntercomImage(const std::string &url, bool popup);
 
 private:
   lv_obj_t *chat_list_ = nullptr;

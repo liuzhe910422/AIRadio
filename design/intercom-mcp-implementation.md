@@ -49,6 +49,8 @@ sequenceDiagram
 
 ## 3. 已提供的工具
 
+`self.camera.take_photo` 在带摄像头的设备上仍返回原有的照片解释结果；如果 Intercom 已连接，固件会同时上传最近照片并广播 `image_message`。图片广播是附加动作，失败不改变照片解释工具的返回结果。图片链路细节见[对讲图片消息设计](intercom-image-messaging.md)。
+
 | 工具 | 输入参数 | 实现方法 | 当前返回语义 |
 |---|---|---|---|
 | `self.intercom.set_hosting` | `enabled` 必填boolean | `SetHosted()` | bool，仅表示请求排队，实际状态以hosting_state为准 |
