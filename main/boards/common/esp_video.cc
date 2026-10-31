@@ -905,6 +905,27 @@ bool EspVideo::SetHMirror(bool enabled) {
     return true;
 }
 
+bool EspVideo::GetCapturedJpeg(std::string &jpeg) {
+    if (!frame_.data || frame_.len == 0 || frame_.width == 0 || frame_.height == 0) {
+        return false;
+    }
+    jpeg.clear();
+    const bool ok = image_to_jpeg_cb(
+        frame_.data, frame_.len, frame_.width, frame_.height, frame_.format, 80,
+        [](void *arg, size_t index, const void *data, size_t len) -> size_t {
+            auto *out = static_cast<std::string *>(arg);
+            if (data != nullptr && len > 0)
+                out->append(static_cast<const char *>(data), len);
+            return len;
+        },
+        &jpeg);
+    if (!ok || jpeg.empty()) {
+        jpeg.clear();
+        return false;
+    }
+    return true;
+}
+
 bool EspVideo::SetVFlip(bool enabled) {
     if (video_fd_ < 0)
         return false;

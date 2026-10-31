@@ -10,6 +10,8 @@ public:
 
     virtual void SetExplainUrl(const std::string& url, const std::string& token) = 0;
     virtual bool Capture() = 0;
+    // Encode the last captured frame as a JPEG for transport to another device.
+    virtual bool GetCapturedJpeg(std::string &jpeg) { return false; }
     virtual bool SetHMirror(bool enabled) = 0;
     virtual bool SetVFlip(bool enabled) = 0;
     virtual bool SetSwapBytes(bool enabled) { return false; }  // Optional, default no-op

@@ -1,13 +1,62 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 )
+
+func (a *apiServer) image(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		if r.ContentLength > 512*1024 {
+			http.Error(w, "image too large", 413)
+			return
+		}
+		if err := r.ParseMultipartForm(512 * 1024); err != nil {
+			http.Error(w, "invalid image", 400)
+			return
+		}
+		f, _, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "file is required", 400)
+			return
+		}
+		defer f.Close()
+		data, err := io.ReadAll(io.LimitReader(f, 512*1024+1))
+		if err != nil || len(data) == 0 || len(data) > 512*1024 {
+			http.Error(w, "invalid image", 400)
+			return
+		}
+		if len(data) < 3 || data[0] != 0xff || data[1] != 0xd8 {
+			http.Error(w, "jpeg required", 400)
+			return
+		}
+		idb := make([]byte, 12)
+		_, _ = rand.Read(idb)
+		id := fmt.Sprintf("%x", idb)
+		a.s.imageMu.Lock()
+		a.s.images[id] = data
+		a.s.imageMu.Unlock()
+		a.json(w, map[string]string{"image_url": "/api/intercom/images/" + id})
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/intercom/images/")
+	a.s.imageMu.RLock()
+	data, ok := a.s.images[id]
+	a.s.imageMu.RUnlock()
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Write(data)
+}
 
 type apiServer struct {
 	mu       sync.Mutex
@@ -273,6 +322,8 @@ func (a *apiServer) handler(w http.ResponseWriter, r *http.Request) {
 		a.hostingConfig(w, r)
 	case r.URL.Path == "/api/intercom/auth/config":
 		a.intercomAuthConfig(w, r)
+	case r.URL.Path == "/api/intercom/images" || strings.HasPrefix(r.URL.Path, "/api/intercom/images/"):
+		a.image(w, r)
 	case r.URL.Path == "/api/tts/config":
 		a.ttsConfig(w, r)
 	case r.URL.Path == "/api/tts/test":

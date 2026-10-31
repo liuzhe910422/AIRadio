@@ -115,6 +115,10 @@ void McpServer::AddCommonTools() {
               if (!camera->Capture()) {
                 return std::unexpected("Failed to capture photo");
               }
+              std::string jpeg;
+              if (camera->GetCapturedJpeg(jpeg)) {
+                Application::GetInstance().GetIntercom().SendImage(jpeg);
+              }
               auto question = properties["question"].value<std::string>();
               auto result = camera->Explain(question);
               if (!result) {

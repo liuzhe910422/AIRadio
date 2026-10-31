@@ -65,6 +65,8 @@ type control struct {
 	TargetDeviceID  string        `json:"target_device_id,omitempty"`
 	CreatorDeviceID string        `json:"creator_device_id,omitempty"`
 	Status          string        `json:"status,omitempty"`
+	ImageURL        string        `json:"image_url,omitempty"`
+	Text            string        `json:"text,omitempty"`
 	Events          *[]event      `json:"events,omitempty"`
 	Index           int           `json:"index,omitempty"`
 }
@@ -178,6 +180,8 @@ func (p *peer) writer() {
 }
 
 type server struct {
+	imageMu        sync.RWMutex
+	images         map[string][]byte
 	usersMu        sync.Mutex
 	users          map[string]consoleUser
 	publicBaseURL  string
@@ -199,7 +203,7 @@ type server struct {
 }
 
 func newServer() *server {
-	return &server{chat: newChatService(), peers: make(map[string]*peer), slots: make(chan struct{}, maxConnections), store: newMemoryStore(), events: newMemoryEventStore(), eventReminders: map[string]string{}}
+	return &server{chat: newChatService(), peers: make(map[string]*peer), images: make(map[string][]byte), slots: make(chan struct{}, maxConnections), store: newMemoryStore(), events: newMemoryEventStore(), eventReminders: map[string]string{}}
 }
 
 func (s *server) remove(p *peer) {
@@ -543,6 +547,21 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			p.send(control{Type: "language_state", OK: boolPtr(true), Language: s.store.DeviceLanguage(p.id)})
+		case "image_message":
+			if c.ImageURL == "" || len(c.ImageURL) > 2048 {
+				p.send(control{Type: "error", Error: "invalid image_url"})
+				break
+			}
+			m := control{Type: "image_message", MessageID: randomToken(), SourceID: p.id, ImageURL: c.ImageURL, Text: c.Text}
+			s.mu.Lock()
+			room := s.store.CurrentRoom(p.id).ID
+			for _, other := range s.peers {
+				if other.chatEnabled && s.store.CurrentRoom(other.id).ID == room {
+					m.ChatSessionID = other.playbackToken()
+					other.send(m)
+				}
+			}
+			s.mu.Unlock()
 		case "set_hosting":
 			s.mu.Lock()
 			if c.Enabled == nil || s.active == p {

@@ -89,6 +89,7 @@ public:
   const std::string &ReplayMessage() const { return replay_message_; }
   void PlayChatMessage(const std::string &id);
   void StopChatReplay();
+  bool SendImage(const std::string &jpeg);
 
 private:
   void ShowRoomPicker(const std::string &response, uint32_t generation);

@@ -108,6 +108,7 @@
 连接到 `/ws` 后，客户端第一条消息必须是 JSON `hello`。服务端限制：
 
 - 控制帧最大 1024 字节。
+- 图片内容不放入控制帧；图片通过 HTTP 上传和下载，控制帧只传图片 URL 与元数据。
 - 单个二进制音频帧最大 4096 字节。
 - 单段最多 500 帧、512 KiB、35 秒。
 - 最多 128 个连接。
@@ -157,6 +158,8 @@
 | `code` | string | 房间四位加入码（1000～9999） |
 | `name` | string | 创建房间名称 |
 | `device_ids` | string[] | 创建房间时的成员列表 |
+| `image_url` | string | 图片消息的 HTTP(S) 路径或 URL |
+| `text` | string | 图片消息提示文本 |
 
 未列出的字段会被忽略或按消息类型处理；未知 `type` 会返回 error 并中止当前会话。
 
@@ -321,6 +324,16 @@
 ```
 
 当前会话随后被中止。
+
+## 6. 图片消息
+
+设备将 JPEG 以 multipart 形式上传到 `POST /api/intercom/images`。服务端返回 `image_url`，随后设备通过 WebSocket 发送 `image_message`。服务端向同房间设备广播，并补充 `message_id`、`source_id` 和接收方的 `chat_session_id`。
+
+```json
+{"type":"image_message","message_id":"...","source_id":"002","image_url":"/api/intercom/images/...","text":"收到一张图片"}
+```
+
+接收设备将相对路径按已配置的 WebSocket 地址转换为 HTTP(S) 地址，再按需下载图片。当前图片接口限制 JPEG 和 512 KiB；服务端暂存于内存，图片鉴权、持久化、过期清理和缩略图接口尚未实现。
 
 ## 6. 典型流程
 

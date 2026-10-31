@@ -423,6 +423,28 @@ void Intercom::HandleChatEvent(const cJSON *json) {
   };
   auto session = stringField("chat_session_id");
   auto type = stringField("type");
+  if (type == "image_message") {
+    IntercomChatMessage image;
+    image.id = stringField("message_id");
+    image.source = stringField("source_id");
+    image.image = true;
+    image.image_url = stringField("image_url");
+    image.text = stringField("text");
+    if (image.id.empty()) image.id = std::to_string(esp_random());
+    if (image.image_url.rfind("/", 0) == 0) {
+      auto origin = url_; auto end = origin.find('/', origin.find("://") + 3);
+      if (end != std::string::npos) origin.resize(end);
+      if (origin.rfind("ws://", 0) == 0) origin.replace(0, 5, "http://");
+      else if (origin.rfind("wss://", 0) == 0) origin.replace(0, 6, "https://");
+      image.image_url = origin + image.image_url;
+    }
+    image.own = image.source == id_; image.available = !image.image_url.empty();
+    app_.Schedule([this, image = std::move(image)]() mutable {
+      if (chat_messages_.size() >= 20) chat_messages_.erase(chat_messages_.begin());
+      chat_messages_.push_back(std::move(image)); ++chat_revision_;
+    });
+    return;
+  }
   if (type != "chat_message" && type != "chat_message_update") {
     if (!session.empty() && session.size() <= 128 &&
         (type == "hello_ack" || type == "room_state" ||
@@ -930,6 +952,45 @@ void Intercom::RecordTask() {
 
 bool Intercom::SendText(const std::string &text) {
   return ws_ && ws_->IsConnected() && ws_->Send(text);
+}
+
+bool Intercom::SendImage(const std::string &jpeg) {
+  if (jpeg.empty() || jpeg.size() > 512 * 1024 || !network_ || url_.empty()) return false;
+  std::string http_url = url_;
+  if (http_url.rfind("ws://", 0) == 0) http_url.replace(0, 5, "http://");
+  else if (http_url.rfind("wss://", 0) == 0) http_url.replace(0, 6, "https://");
+  auto slash = http_url.find('/', http_url.find("://") + 3);
+  if (slash != std::string::npos) http_url.resize(slash);
+  http_url += "/api/intercom/images";
+  auto http = Board::GetInstance().GetNetwork()->CreateHttp(4);
+  if (!http) return false;
+  const std::string boundary = "----AIRADIO_IMAGE_BOUNDARY";
+  http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+  http->SetHeader("X-Device-Id", id_);
+  if (!http->Open("POST", http_url)) return false;
+  auto write = [&http](const char *p, size_t n) { return http->Write(p, n).has_value(); };
+  std::string head = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"camera.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
+  if (!write(head.data(), head.size()) || !write(jpeg.data(), jpeg.size())) { http->Close(); return false; }
+  std::string tail = "\r\n--" + boundary + "--\r\n";
+  if (!write(tail.data(), tail.size())) { http->Close(); return false; }
+  auto status = http->GetStatusCode();
+  if (!status || *status != 200) { http->Close(); return false; }
+  auto response = http->ReadAll(); http->Close();
+  cJSON *root = cJSON_Parse(response.c_str());
+  if (!root) return false;
+  auto image_url = cJSON_GetObjectItem(root, "image_url");
+  bool ok = cJSON_IsString(image_url) && image_url->valuestring[0];
+  if (ok) {
+    cJSON *event = cJSON_CreateObject();
+    cJSON_AddStringToObject(event, "type", "image_message");
+    cJSON_AddStringToObject(event, "image_url", image_url->valuestring);
+    cJSON_AddStringToObject(event, "text", I18n(*this, "收到一张图片", "Received an image"));
+    char *raw = cJSON_PrintUnformatted(event);
+    if (raw) QueueText(raw);
+    cJSON_free(raw); cJSON_Delete(event);
+  }
+  cJSON_Delete(root);
+  return ok;
 }
 
 void Intercom::QueueText(std::string text) {

@@ -209,7 +209,7 @@ private:
             .reset_pin = CAM_PIN_RESET,
             .pwdn_pin = CAM_PIN_PWDN,
             .dvp_pin = dvp_pin_config,
-            .xclk_freq = 12000000,
+            .xclk_freq = 24000000,
         };
 
         esp_video_init_config_t video_config = {
