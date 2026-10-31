@@ -18,6 +18,9 @@ public:
 private:
   lv_obj_t *chat_list_ = nullptr;
   lv_obj_t *chat_title_ = nullptr;
+  lv_obj_t *environment_label_ = nullptr;
+  int64_t environment_start_us_ = 0;
+  void UpdateEnvironment();
   uint32_t chat_revision_ = UINT32_MAX;
   void UpdateChatRecords();
   void UpdateRoomPicker();
