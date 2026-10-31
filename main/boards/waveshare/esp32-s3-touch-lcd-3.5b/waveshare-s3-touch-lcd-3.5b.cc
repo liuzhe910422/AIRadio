@@ -5,6 +5,7 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include "dht11_monitor.h"
 
 #include <esp_log.h>
 #include "i2c_device.h"
@@ -352,6 +353,8 @@ public:
         InitializeButtons();
         InitializeCamera();
         GetBacklight()->RestoreBrightness();
+        // J8 pin 11 (SD MOSI); the SD card slot must remain empty.
+        StartDht11Monitor(GPIO_NUM_10);
     }
 
     virtual AudioCodec* GetAudioCodec() override {

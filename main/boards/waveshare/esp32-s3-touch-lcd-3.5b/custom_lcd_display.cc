@@ -1,5 +1,6 @@
 
 #include "custom_lcd_display.h"
+#include "dht11_monitor.h"
 #include "application.h"
 #include "assets/lang_config.h"
 #include "board.h"
@@ -9,6 +10,7 @@
 #include "lvgl_image.h"
 #include "jpg/jpeg_to_image.h"
 
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -21,6 +23,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 
 #define TAG "CustomLcdDisplay"
 
@@ -65,8 +68,18 @@ void CustomLcdDisplay::SetupUI() {
   lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
   auto title = lv_label_create(panel);
   chat_title_ = title;
-  lv_label_set_text(title, English(Application::GetInstance().GetIntercom()) ? "Intercom history" : "对讲记录");
+  lv_label_set_text(title, English(Application::GetInstance().GetIntercom()) ? "History" : "对讲记录");
+  lv_obj_set_width(title, 80);
+  lv_label_set_long_mode(title, LV_LABEL_LONG_CLIP);
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+  environment_label_ = lv_label_create(panel);
+  lv_obj_set_width(environment_label_, 198);
+  // Inherit the same text font and Chinese fallback as the history heading.
+  lv_obj_set_style_text_align(environment_label_, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_label_set_long_mode(environment_label_, LV_LABEL_LONG_CLIP);
+  lv_obj_align(environment_label_, LV_ALIGN_TOP_RIGHT, 0, 0);
+  environment_start_us_ = esp_timer_get_time();
+  UpdateEnvironment();
   chat_list_ = lv_obj_create(panel);
   lv_obj_set_size(chat_list_, 282, 270);
   lv_obj_align(chat_list_, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -121,7 +134,8 @@ void CustomLcdDisplay::UpdateIntercom() {
   if (!intercom_label_ || !Lock(100))
     return;
   auto &intercom = Application::GetInstance().GetIntercom();
-  if (chat_title_) lv_label_set_text(chat_title_, English(intercom) ? "Intercom history" : "对讲记录");
+  if (chat_title_) lv_label_set_text(chat_title_, English(intercom) ? "History" : "对讲记录");
+  UpdateEnvironment();
   lv_label_set_text(intercom_label_, StatusText(intercom));
   lv_obj_set_style_bg_color(
       intercom_button_, lv_color_hex(intercom.IsHosted() ? 0xE6B83D : 0x3187C8),
@@ -153,6 +167,28 @@ void CustomLcdDisplay::UpdateIntercom() {
   UpdateRoomPicker();
   UpdateEventPicker();
   Unlock();
+}
+
+// Called only while the LVGL lock is held, including during initial UI setup.
+void CustomLcdDisplay::UpdateEnvironment() {
+  if (!environment_label_) return;
+  const bool english = English(Application::GetInstance().GetIntercom());
+  const auto reading = GetDht11Reading();
+  const int64_t reference = reading.valid ? reading.last_success_us : environment_start_us_;
+  const bool stale = esp_timer_get_time() - reference >= 15000000;
+  if (stale) {
+    lv_label_set_text(environment_label_, english ? "Temp/RH: read error" : "温湿度：读取异常");
+  } else if (!reading.valid) {
+    lv_label_set_text(environment_label_, english ? "Temp/RH: --°C / --%" : "温湿度：--°C / --%");
+  } else {
+    // LVGL's built-in formatter has float support disabled in this firmware.
+    char text[96];
+    snprintf(text, sizeof(text), english ? "Temp/RH: %.1f°C / %.1f%%" : "温湿度：%.1f°C / %.1f%%",
+             static_cast<double>(reading.temperature), static_cast<double>(reading.humidity));
+    lv_label_set_text(environment_label_, text);
+  }
+  lv_obj_set_style_text_color(environment_label_,
+                              lv_color_hex(stale ? 0xB54708 : 0x17332D), 0);
 }
 
 void CustomLcdDisplay::UpdateEventPicker() {
