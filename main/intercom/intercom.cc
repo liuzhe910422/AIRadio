@@ -203,6 +203,37 @@ std::string Intercom::ListRooms() {
   return response;
 }
 
+bool Intercom::CreateEvent(const std::string &target, const std::string &content,
+                           const std::string &scheduled_at) {
+  if (!ws_ || !ws_->IsConnected() || target.empty() || content.empty() || scheduled_at.empty()) return false;
+  cJSON *j = cJSON_CreateObject(); cJSON_AddStringToObject(j, "type", "event_create"); cJSON_AddStringToObject(j, "request_id", std::to_string(esp_random()).c_str()); cJSON_AddStringToObject(j, "target_device_id", target.c_str()); cJSON_AddStringToObject(j, "content", content.c_str()); cJSON_AddStringToObject(j, "scheduled_at", scheduled_at.c_str()); char *raw = cJSON_PrintUnformatted(j); bool ok = raw && SendText(raw); cJSON_free(raw); cJSON_Delete(j); return ok;
+}
+std::string Intercom::ListEvents() {
+  std::unique_lock<std::mutex> lock(events_mutex_);
+  if (!ws_ || !ws_->IsConnected()) return "{\"ok\":false,\"error\":\"intercom disconnected\"}";
+  if (!events_request_id_.empty()) return "{\"ok\":false,\"error\":\"event query busy\"}";
+  events_request_id_ = std::to_string(esp_random());
+  events_response_.clear();
+  auto request = events_request_id_;
+  if (!SendText("{\"type\":\"event_list\",\"request_id\":\"" + request + "\"}")) { events_request_id_.clear(); return "{\"ok\":false,\"error\":\"event query failed\"}"; }
+  events_cv_.wait_for(lock, std::chrono::seconds(5), [this]() { return !events_response_.empty(); });
+  events_request_id_.clear();
+  return events_response_.empty() ? "{\"ok\":false,\"error\":\"event query timed out\"}" : events_response_;
+}
+bool Intercom::CompleteEvent(int index) {
+  if (index < 1 || static_cast<size_t>(index) > event_options_.size()) return false;
+  return ws_ && ws_->IsConnected() && SendText("{\"type\":\"event_complete\",\"event_id\":\"" + event_options_[index - 1].id + "\"}");
+}
+bool Intercom::CancelEvent(int index) {
+  if (index < 1 || static_cast<size_t>(index) > event_options_.size()) return false;
+  return ws_ && ws_->IsConnected() && SendText("{\"type\":\"event_cancel\",\"event_id\":\"" + event_options_[index - 1].id + "\"}");
+}
+
+int Intercom::EventPickerSeconds() const {
+  return static_cast<int>(std::max<int64_t>(
+      0, (event_picker_deadline_ - esp_timer_get_time() + 999999) / 1000000));
+}
+
 int Intercom::RoomPickerSeconds() const {
   return static_cast<int>(std::max<int64_t>(
       0, (room_picker_deadline_ - esp_timer_get_time() + 999999) / 1000000));
@@ -401,7 +432,10 @@ void Intercom::HandleChatEvent(const cJSON *json) {
   IntercomChatMessage message;
   message.automated =
       cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "automated"));
-  message.system = !stringField("event_kind").empty();
+  auto event_kind = stringField("event_kind");
+  message.system = !event_kind.empty();
+  message.event_notification = event_kind.rfind("event_", 0) == 0;
+  message.event_terminal = event_kind == "event_completed" || event_kind == "event_cancelled";
   bool announce =
       cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "announce"));
   message.id = stringField("message_id");
@@ -723,6 +757,8 @@ void Intercom::Tick() {
       CloseRoomPicker();
     }
   }
+  if (event_picker_visible_ && esp_timer_get_time() >= event_picker_deadline_)
+    CloseEventPicker();
   if (CanRecord() && !replay_task_active_ && !announcements_.empty()) {
     auto id = announcements_.front();
     announcements_.pop_front();
@@ -1029,6 +1065,39 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
     cJSON_Delete(json);
     return;
   }
+  if (!strcmp(name, "event_list_ack")) {
+    auto events = cJSON_GetObjectItem(json, "events");
+    int count = cJSON_IsArray(events) ? cJSON_GetArraySize(events) : 0;
+    pending_event_ids_.clear(); if (cJSON_IsArray(events)) { cJSON *x=nullptr; cJSON_ArrayForEach(x,events) { auto idv=cJSON_GetObjectItem(x,"event_id"); if(cJSON_IsString(idv)) pending_event_ids_.insert(idv->valuestring); } }
+    { std::lock_guard<std::mutex> lock(events_mutex_); events_response_.assign(data, len); events_cv_.notify_all(); }
+    app_.Schedule([this, count]() { SetEventCount(count); });
+    app_.Schedule([this, response = std::string(data, len)]() {
+      ShowEventPicker(response);
+    });
+    cJSON_Delete(json);
+    return;
+  }
+  if (!strcmp(name, "event_execute")) {
+    const char *content = cJSON_IsString(cJSON_GetObjectItem(json, "content")) ? cJSON_GetObjectItem(json, "content")->valuestring : "请处理事件";
+    const char *eid = cJSON_IsString(cJSON_GetObjectItem(json, "event_id")) ? cJSON_GetObjectItem(json, "event_id")->valuestring : "";
+    std::string id_copy = eid, text_copy = content;
+    app_.Schedule([this, id_copy, text_copy]() { Board::GetInstance().GetDisplay()->ShowNotification(text_copy); if (!id_copy.empty()) SendText("{\"type\":\"event_execute_ack\",\"event_id\":\"" + id_copy + "\",\"ok\":true}"); });
+  }
+  if (!strcmp(name, "event_state") || !strcmp(name, "event_notification") || !strcmp(name, "event_complete_ack") || !strcmp(name, "event_cancel_ack")) {
+    auto event_id_value = cJSON_GetObjectItem(json, "event_id");
+    std::string event_id = cJSON_IsString(event_id_value) ? event_id_value->valuestring : "";
+    const char *content = cJSON_IsString(cJSON_GetObjectItem(json, "content")) ? cJSON_GetObjectItem(json, "content")->valuestring : "事件状态已更新";
+    const char *event_status = cJSON_IsString(cJSON_GetObjectItem(json, "status")) ? cJSON_GetObjectItem(json, "status")->valuestring : "";
+    bool terminal = !strcmp(name, "event_complete_ack") || !strcmp(name, "event_cancel_ack") || !strcmp(event_status, "completed") || !strcmp(event_status, "cancelled") || !strcmp(event_status, "overdue");
+    std::string text = content;
+    bool pending = !terminal && (!strcmp(name, "event_state") || !strcmp(name, "event_notification"));
+    if (!event_id.empty()) {
+      if (pending) pending_event_ids_.insert(event_id);
+      if (terminal) pending_event_ids_.erase(event_id);
+    }
+    int event_count = static_cast<int>(pending_event_ids_.size());
+    app_.Schedule([this, text, event_count]() { pending_event_count_ = event_count; Board::GetInstance().GetDisplay()->ShowNotification(text); });
+  }
   // An invitation carries the destination room name, not our active room.
   // Only confirmed membership messages may update the current-room cache.
   const bool confirmed_room =
@@ -1192,6 +1261,14 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
   } else if (!strcmp(name, "error"))
     session_failed_ = true;
   cJSON_Delete(json);
+}
+void Intercom::ShowEventPicker(const std::string &response) {
+  cJSON *root=cJSON_Parse(response.c_str()); if(!root) return;
+  auto arr=cJSON_GetObjectItem(root,"events"); event_options_.clear();
+  if (!cJSON_IsTrue(cJSON_GetObjectItem(root,"ok")) || !cJSON_IsArray(arr)) { cJSON_Delete(root); Board::GetInstance().GetDisplay()->ShowNotification("事件查询失败"); return; }
+  cJSON *x=nullptr; cJSON_ArrayForEach(x,arr) { auto id=cJSON_GetObjectItem(x,"event_id"); auto c=cJSON_GetObjectItem(x,"content"); auto t=cJSON_GetObjectItem(x,"scheduled_at"); if(cJSON_IsString(id)&&cJSON_IsString(c)) event_options_.push_back({id->valuestring,c->valuestring,cJSON_IsString(t)?t->valuestring:""}); }
+  cJSON_Delete(root); event_picker_visible_=!event_options_.empty(); event_picker_deadline_=esp_timer_get_time()+15*1000000LL; ++event_picker_revision_;
+  if (event_options_.empty()) Board::GetInstance().GetDisplay()->ShowNotification("当前没有待处理事件");
 }
 
 void Intercom::NetworkTask() {

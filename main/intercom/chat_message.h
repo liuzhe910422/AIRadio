@@ -14,4 +14,6 @@ struct IntercomChatMessage {
   bool own = false;
   bool available = false;
   bool text_truncated = false;
+  bool event_notification = false;
+  bool event_terminal = false;
 };

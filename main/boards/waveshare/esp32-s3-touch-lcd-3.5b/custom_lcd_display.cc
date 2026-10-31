@@ -62,13 +62,13 @@ void CustomLcdDisplay::SetupUI() {
   device_status_label_ = lv_label_create(intercom_bar_);
   lv_label_set_text(device_status_label_, "设备：未配置");
   lv_obj_set_width(device_status_label_, 164);
-  lv_label_set_long_mode(device_status_label_, LV_LABEL_LONG_DOT);
-  lv_obj_set_height(device_status_label_, 40);
+  lv_label_set_long_mode(device_status_label_, LV_LABEL_LONG_WRAP);
+  lv_obj_set_height(device_status_label_, 54);
   lv_obj_align(device_status_label_, LV_ALIGN_TOP_LEFT, 0, 4);
   intercom_status_label_ = lv_label_create(intercom_bar_);
   lv_label_set_text(intercom_status_label_, "对讲状态\n房间：默认房间");
   lv_obj_set_width(intercom_status_label_, 164);
-  lv_obj_align(intercom_status_label_, LV_ALIGN_TOP_LEFT, 0, 48);
+  lv_obj_align(intercom_status_label_, LV_ALIGN_TOP_LEFT, 0, 68);
   intercom_button_ = lv_button_create(intercom_bar_);
   lv_obj_set_size(intercom_button_, 145, 82);
   lv_obj_align(intercom_button_, LV_ALIGN_CENTER, 0, 32);
@@ -117,8 +117,9 @@ void CustomLcdDisplay::UpdateIntercom() {
   }
   if (device_status_label_) {
     const char *device_id = intercom.DeviceId();
-    lv_label_set_text_fmt(device_status_label_, "设备：%s",
-                          device_id[0] ? device_id : "未配置");
+    lv_label_set_text_fmt(device_status_label_, "设备：%s\n待处理事件：%d条",
+                          device_id[0] ? device_id : "未配置",
+                          intercom.PendingEventCount());
   }
   if (intercom.IsHosted() || intercom.CanRecord() || intercom.IsRecording())
     lv_obj_remove_state(intercom_button_, LV_STATE_DISABLED);
@@ -126,7 +127,65 @@ void CustomLcdDisplay::UpdateIntercom() {
     lv_obj_add_state(intercom_button_, LV_STATE_DISABLED);
   UpdateChatRecords();
   UpdateRoomPicker();
+  UpdateEventPicker();
   Unlock();
+}
+
+void CustomLcdDisplay::UpdateEventPicker() {
+  auto &intercom = Application::GetInstance().GetIntercom();
+  if (!intercom.EventPickerVisible()) {
+    if (event_picker_)
+      lv_obj_delete(event_picker_);
+    event_picker_ = event_picker_title_ = event_picker_list_ = nullptr;
+    return;
+  }
+  if (event_picker_ && event_picker_revision_ == intercom.EventPickerRevision()) {
+    if (event_picker_title_)
+      lv_label_set_text_fmt(event_picker_title_, "待处理事件 · %d秒", intercom.EventPickerSeconds());
+    return;
+  }
+  if (event_picker_)
+    lv_obj_delete(event_picker_);
+  event_picker_revision_ = intercom.EventPickerRevision();
+  event_picker_ = lv_obj_create(lv_screen_active());
+  lv_obj_set_size(event_picker_, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_color(event_picker_, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(event_picker_, LV_OPA_50, 0);
+  auto panel = lv_obj_create(event_picker_);
+  lv_obj_set_size(panel, 420, 280);
+  lv_obj_center(panel);
+  lv_obj_set_style_pad_all(panel, 12, 0);
+  lv_obj_set_style_bg_color(panel, lv_color_hex(0xF4F7F6), 0);
+  auto title = lv_label_create(panel);
+  event_picker_title_ = title;
+  lv_label_set_text_fmt(title, "待处理事件 · %d秒", intercom.EventPickerSeconds());
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 8);
+  auto close = lv_button_create(panel);
+  lv_obj_set_size(close, 48, 40);
+  lv_obj_align(close, LV_ALIGN_TOP_RIGHT, 0, 0);
+  auto cl = lv_label_create(close);
+  lv_label_set_text(cl, "X");
+  lv_obj_center(cl);
+  lv_obj_add_event_cb(close, [](lv_event_t *) {
+    auto &app = Application::GetInstance();
+    app.Schedule([&app]() { app.GetIntercom().CloseEventPicker(); });
+  }, LV_EVENT_CLICKED, nullptr);
+  event_picker_list_ = lv_obj_create(panel);
+  lv_obj_set_size(event_picker_list_, 388, 200);
+  lv_obj_align(event_picker_list_, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_flex_flow(event_picker_list_, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(event_picker_list_, LV_DIR_VER);
+  int index = 1;
+  for (const auto &event : intercom.EventOptions()) {
+    auto button = lv_button_create(event_picker_list_);
+    lv_obj_set_width(button, LV_PCT(100));
+    auto label = lv_label_create(button);
+    lv_label_set_text_fmt(label, "%d. %s\n%s", index++, event.content.c_str(),
+                          event.scheduled_at.c_str());
+    lv_obj_set_width(label, LV_PCT(100));
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+  }
+  lv_label_set_text_fmt(title, "待处理事件 · %d秒", intercom.EventPickerSeconds());
 }
 
 void CustomLcdDisplay::UpdateRoomPicker() {
@@ -273,19 +332,23 @@ void CustomLcdDisplay::UpdateChatRecords() {
     lv_obj_set_height(button, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(button, 8, 0);
     const bool playing = intercom.ReplayMessage() == message.id;
-    lv_obj_set_style_bg_color(
-        button,
-        lv_color_hex(playing ? 0xFFD690
-                             : (message.system
-                                    ? 0xEEE2C9
-                                    : (message.own ? 0xCDEAD9 : 0xDFEAF5))),
-        0);
+    uint32_t bubble_color = 0xDFEAF5;
+    if (playing) {
+      bubble_color = 0xFFD690;
+    } else if (message.event_notification) {
+      bubble_color = message.event_terminal ? 0xCDEAD9 : 0xF2B6B2;
+    } else if (message.system) {
+      bubble_color = 0xEEE2C9;
+    } else if (message.own) {
+      bubble_color = 0xCDEAD9;
+    }
+    lv_obj_set_style_bg_color(button, lv_color_hex(bubble_color), 0);
     lv_obj_set_style_text_color(button, lv_color_hex(0x17332D), 0);
     auto label = lv_label_create(button);
     lv_obj_set_width(label, LV_PCT(100));
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
     std::string text =
-        (message.system ? "房间通知" : (message.own ? "我" : message.source)) +
+        (message.event_notification ? "事件通知" : (message.system ? "房间通知" : (message.own ? "我" : message.source))) +
         " · " +
         (message.automated ? std::string("托管回复 · ") : std::string()) +
         std::to_string((message.duration_ms + 999) / 1000) + "秒" +
