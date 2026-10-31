@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -57,6 +58,14 @@ type control struct {
 	Name            string        `json:"name,omitempty"`
 	DeviceIDs       []string      `json:"device_ids,omitempty"`
 	InviteDeviceIDs []string      `json:"invite_device_ids,omitempty"`
+	EventID         string        `json:"event_id,omitempty"`
+	Content         string        `json:"content,omitempty"`
+	ScheduledAt     string        `json:"scheduled_at,omitempty"`
+	TargetDeviceID  string        `json:"target_device_id,omitempty"`
+	CreatorDeviceID string        `json:"creator_device_id,omitempty"`
+	Status          string        `json:"status,omitempty"`
+	Events          *[]event      `json:"events,omitempty"`
+	Index           int           `json:"index,omitempty"`
 }
 
 type listedRoom struct {
@@ -168,25 +177,28 @@ func (p *peer) writer() {
 }
 
 type server struct {
-	usersMu       sync.Mutex
-	users         map[string]consoleUser
-	publicBaseURL string
-	chat          *chatService
-	mu            sync.Mutex
-	peers         map[string]*peer
-	active        *peer
-	started       time.Time
-	slots         chan struct{}
-	saveWAV       bool
-	recordDir     string
-	store         roomStore
-	authMu        sync.RWMutex
-	authEnabled   bool
-	authKey       string
+	usersMu        sync.Mutex
+	users          map[string]consoleUser
+	publicBaseURL  string
+	chat           *chatService
+	mu             sync.Mutex
+	peers          map[string]*peer
+	active         *peer
+	started        time.Time
+	slots          chan struct{}
+	saveWAV        bool
+	recordDir      string
+	store          roomStore
+	events         eventStore
+	eventMu        sync.Mutex
+	eventReminders map[string]string
+	authMu         sync.RWMutex
+	authEnabled    bool
+	authKey        string
 }
 
 func newServer() *server {
-	return &server{chat: newChatService(), peers: make(map[string]*peer), slots: make(chan struct{}, maxConnections), store: newMemoryStore()}
+	return &server{chat: newChatService(), peers: make(map[string]*peer), slots: make(chan struct{}, maxConnections), store: newMemoryStore(), events: newMemoryEventStore(), eventReminders: map[string]string{}}
 }
 
 func (s *server) remove(p *peer) {
@@ -232,6 +244,15 @@ func (s *server) register(p *peer, id string) error {
 	p.roomID = s.store.RegisterDevice(id, p.remoteAddress, p.deviceType).ID
 	log.Printf("connect id=%s online=%d", id, len(s.peers))
 	return nil
+}
+
+func (s *server) syncEvents(p *peer) {
+	for _, e := range s.events.ListEvents(p.id) {
+		p.send(control{Type: "event_state", EventID: e.ID, Content: e.Content, ScheduledAt: e.ScheduledAt, Status: e.Status})
+		if e.Status == "overdue" {
+			p.send(control{Type: "event_notification", EventID: e.ID, Content: eventText(e, "事件已逾期"), Status: e.Status})
+		}
+	}
 }
 
 func (s *server) start(p *peer, c control) {
@@ -482,6 +503,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	ack.RoomID, ack.RoomName = current.ID, current.Name
 	ack.ChatSessionID, ack.PlaybackToken = p.playbackToken(), p.playbackToken()
 	p.send(ack)
+	s.syncEvents(p)
 	s.roomOnline(p, current)
 	for {
 		kind, data, err = conn.ReadMessage()
@@ -540,6 +562,39 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			p.send(response)
 			log.Printf("debug list rooms device=%s request=%s count=%d", p.id, c.RequestID, len(rooms))
+		case "event_create":
+			e, err := s.events.CreateEvent(c.TargetDeviceID, p.id, c.Content, c.ScheduledAt)
+			if err != nil {
+				p.send(control{Type: "event_create_ack", RequestID: c.RequestID, OK: boolPtr(false), Error: err.Error()})
+				break
+			}
+			p.send(control{Type: "event_create_ack", RequestID: c.RequestID, OK: boolPtr(true), EventID: e.ID, TargetDeviceID: e.TargetDeviceID, CreatorDeviceID: e.CreatorDeviceID, Content: e.Content, ScheduledAt: e.ScheduledAt, Status: e.Status})
+			if target := s.eventPeer(e.TargetDeviceID); target != nil {
+				target.send(control{Type: "event_state", EventID: e.ID, Content: e.Content, ScheduledAt: e.ScheduledAt, Status: e.Status})
+				s.notifyEvent(e, e.TargetDeviceID, "created", fmt.Sprintf("收到新事件：%s", e.Content))
+			}
+		case "event_list":
+			es := s.events.ListEvents(p.id)
+			p.send(control{Type: "event_list_ack", RequestID: c.RequestID, OK: boolPtr(true), Events: &es})
+		case "event_complete", "event_cancel":
+			status := "completed"
+			if c.Type == "event_cancel" {
+				status = "cancelled"
+			}
+			e, err := s.events.SetEventStatus(c.EventID, p.id, status)
+			if err != nil {
+				p.send(control{Type: c.Type + "_ack", RequestID: c.RequestID, OK: boolPtr(false), Error: err.Error()})
+				break
+			}
+			p.send(control{Type: c.Type + "_ack", RequestID: c.RequestID, OK: boolPtr(true), EventID: e.ID, Status: e.Status})
+			s.notifyEvent(e, e.CreatorDeviceID, status, eventText(e, "事件已"+map[string]string{"completed": "完成", "cancelled": "取消"}[status]))
+			if e.CreatorDeviceID != p.id {
+				s.notifyEvent(e, p.id, status, eventText(e, "事件已"+map[string]string{"completed": "完成", "cancelled": "取消"}[status]))
+			}
+		case "event_execute_ack":
+			if c.EventID != "" {
+				p.send(control{Type: "event_execute_ack", EventID: c.EventID, OK: boolPtr(true)})
+			}
 		case "start":
 			log.Printf("debug ws control device=%s type=start message=%s room=%s", p.id, c.MessageID, s.store.CurrentRoom(p.id).ID)
 			s.start(p, c)
@@ -653,6 +708,7 @@ func main() {
 	if strings.TrimSpace(*dbPath) != "" {
 		if db, err := newSQLiteStore(*dbPath); err == nil {
 			s.store = db
+			s.events = db
 		} else {
 			log.Printf("sqlite unavailable, using memory store: %v", err)
 		}
@@ -679,6 +735,7 @@ func main() {
 	go s.chat.run(ctx, s)
 	go s.chat.runTTS(ctx, s)
 	go s.chat.runHosting(ctx, s)
+	go s.runEvents()
 	log.Fatal(http.ListenAndServe(*addr, httpHandler(s)))
 }
 

@@ -198,6 +198,10 @@ void McpServer::AddUserOnlyTools() {
       PropertyList(), [&intercom](const PropertyList &) -> ReturnValue {
         return intercom.ListRooms();
       });
+  AddTool("self.events.create", "为指定设备创建一个定时事件。内容只描述要做什么，时间使用RFC3339。", PropertyList({Property("target_device_id", kPropertyTypeString), Property("content", kPropertyTypeString), Property("scheduled_at", kPropertyTypeString)}), [&intercom](const PropertyList &p) -> ReturnValue { return intercom.CreateEvent(p["target_device_id"].value<std::string>(), p["content"].value<std::string>(), p["scheduled_at"].value<std::string>()); });
+  AddTool("self.events.list", "查询本机待处理事件，并弹出按序号排列的事件列表。用户询问有哪些事件时必须调用。", PropertyList(), [&intercom](const PropertyList &) -> ReturnValue { return intercom.ListEvents(); });
+  AddTool("self.events.complete", "【必须调用】用户说完成、做完、处理完第几个任务时调用。index是事件列表中的序号，从1开始，例如完成第一个任务传index=1。不要追问任务内容，也不要要求用户提供event_id；如果本地没有该序号，先调用self.events.list。", PropertyList({Property("index", kPropertyTypeInteger, 1, 1, 99)}), [&intercom](const PropertyList &p) -> ReturnValue { return intercom.CompleteEvent(p["index"].value<int>()); });
+  AddTool("self.events.cancel", "【必须调用】用户说取消、撤销第几个任务时调用。index是事件列表中的序号，从1开始，例如取消第一个任务传index=1。不要追问任务内容，也不要要求用户提供event_id；如果本地没有该序号，先调用self.events.list。", PropertyList({Property("index", kPropertyTypeInteger, 1, 1, 99)}), [&intercom](const PropertyList &p) -> ReturnValue { return intercom.CancelEvent(p["index"].value<int>()); });
   AddTool("self.intercom.get_current_room",
           "查询本机当前所在的对讲房间，返回 room_name（房间名称）。"
           "用户问‘我在哪个房间’‘当前对讲群是什么’‘现在在哪个频道’‘查看当前房间’"
@@ -822,7 +826,7 @@ void McpServer::DoToolCall(int id, const std::string &tool_name,
     }
     ReplyResult(id, *result, response_sender);
   };
-  if (tool_name == "self.intercom.list_rooms") {
+  if (tool_name == "self.intercom.list_rooms" || tool_name == "self.events.list") {
     // This tool waits for a network response; never block Application.
     auto work = new std::function<void()>(std::move(invoke));
     if (xTaskCreate(
@@ -832,7 +836,7 @@ void McpServer::DoToolCall(int id, const std::string &tool_name,
               delete task;
               vTaskDelete(nullptr);
             },
-            "intercom_rooms", 8192, work, 2, nullptr) != pdPASS) {
+            tool_name == "self.events.list" ? "intercom_events" : "intercom_rooms", 8192, work, 2, nullptr) != pdPASS) {
       delete work;
       ReplyError(id, "Cannot start room query task", response_sender);
     }

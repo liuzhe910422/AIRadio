@@ -19,10 +19,15 @@ private:
   uint32_t chat_revision_ = UINT32_MAX;
   void UpdateChatRecords();
   void UpdateRoomPicker();
+  void UpdateEventPicker();
   lv_obj_t *room_picker_ = nullptr;
   lv_obj_t *room_picker_title_ = nullptr;
   lv_obj_t *room_picker_list_ = nullptr;
   uint32_t room_picker_revision_ = UINT32_MAX;
+  lv_obj_t *event_picker_ = nullptr;
+  lv_obj_t *event_picker_title_ = nullptr;
+  lv_obj_t *event_picker_list_ = nullptr;
+  uint32_t event_picker_revision_ = UINT32_MAX;
   lv_obj_t *intercom_bar_ = nullptr;
   lv_obj_t *intercom_button_ = nullptr;
   lv_obj_t *intercom_cancel_ = nullptr;

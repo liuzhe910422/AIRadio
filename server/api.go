@@ -261,6 +261,10 @@ func (a *apiServer) handler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("debug http request method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
 	log.Printf("debug http request method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
 	switch {
+	case r.URL.Path == "/api/events":
+		a.events(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/events/"):
+		a.eventAction(w, r)
 	case r.URL.Path == "/api/users" || strings.HasPrefix(r.URL.Path, "/api/users/"):
 		a.usersHandler(w, r)
 	case r.URL.Path == "/api/hosting/test":
@@ -302,4 +306,46 @@ func (a *apiServer) handler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (a *apiServer) events(w http.ResponseWriter, r *http.Request) {
+	if !a.auth(w, r) {
+		return
+	}
+	if r.Method != "GET" {
+		w.WriteHeader(405)
+		return
+	}
+	deviceID := r.URL.Query().Get("device_id")
+	out := []event{}
+	if deviceID != "" {
+		out = a.s.events.ListEvents(deviceID)
+	} else {
+		out = a.s.events.AllEvents()
+	}
+	a.json(w, out)
+}
+func (a *apiServer) eventAction(w http.ResponseWriter, r *http.Request) {
+	if !a.auth(w, r) {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/events/")
+	if r.Method != "POST" || !strings.HasSuffix(id, "/cancel") {
+		w.WriteHeader(405)
+		return
+	}
+	id = strings.TrimSuffix(id, "/cancel")
+	var e event
+	var err error
+	e, err = a.s.events.SetEventStatus(id, "", "cancelled")
+	if err != nil { // admin cancellation
+		e, err = a.s.events.SetEventStatus(id, e.TargetDeviceID, "cancelled")
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	a.s.notifyEvent(e, e.TargetDeviceID, "cancelled", eventText(e, "事件已取消"))
+	a.s.notifyEvent(e, e.CreatorDeviceID, "cancelled", eventText(e, "事件已取消"))
+	a.json(w, e)
 }

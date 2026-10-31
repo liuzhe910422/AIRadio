@@ -273,6 +273,7 @@ type sqliteStore struct {
 	persistMu sync.Mutex
 	path      string
 	*memoryStore
+	eventData *memoryEventStore
 }
 
 func newSQLiteStore(path string) (*sqliteStore, error) {
@@ -281,11 +282,11 @@ func newSQLiteStore(path string) (*sqliteStore, error) {
 			return nil, err
 		}
 	}
-	s := &sqliteStore{path: path, memoryStore: newMemoryStore()}
+	s := &sqliteStore{path: path, memoryStore: newMemoryStore(), eventData: newMemoryEventStore()}
 	if err := s.initAdmin(); err != nil {
 		return nil, err
 	}
-	if _, err := s.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS devices(device_id TEXT PRIMARY KEY,last_seen_at TEXT,ip TEXT,room_id TEXT); CREATE TABLE IF NOT EXISTS rooms(id TEXT PRIMARY KEY,name TEXT,join_code TEXT UNIQUE,is_default INTEGER,status TEXT,created_by TEXT,invite_device_ids TEXT DEFAULT '');`); err != nil {
+	if _, err := s.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS devices(device_id TEXT PRIMARY KEY,last_seen_at TEXT,ip TEXT,room_id TEXT); CREATE TABLE IF NOT EXISTS rooms(id TEXT PRIMARY KEY,name TEXT,join_code TEXT UNIQUE,is_default INTEGER,status TEXT,created_by TEXT,invite_device_ids TEXT DEFAULT ''); CREATE TABLE IF NOT EXISTS events(event_id TEXT PRIMARY KEY,target_device_id TEXT NOT NULL,creator_device_id TEXT NOT NULL,content TEXT NOT NULL,scheduled_at TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,completed_at TEXT,cancelled_at TEXT);`); err != nil {
 		return nil, err
 	}
 	_, _ = s.exec(`ALTER TABLE devices ADD COLUMN device_type TEXT NOT NULL DEFAULT ''`)
@@ -293,9 +294,73 @@ func newSQLiteStore(path string) (*sqliteStore, error) {
 	_, err := s.exec(`INSERT OR IGNORE INTO rooms(id,name,join_code,is_default,status,created_by) VALUES('default','默认房间','',1,'active','')`)
 	if err == nil {
 		s.load()
+		s.loadEventData()
 	}
 	return s, err
 }
+
+func (s *sqliteStore) loadEventData() {
+	b, err := s.exec("SELECT event_id,target_device_id,creator_device_id,content,scheduled_at,status,created_at,COALESCE(completed_at,''),COALESCE(cancelled_at,'') FROM events")
+	if err != nil || len(strings.TrimSpace(string(b))) == 0 {
+		return
+	}
+	var rows []struct {
+		ID        string `json:"event_id"`
+		Target    string `json:"target_device_id"`
+		Creator   string `json:"creator_device_id"`
+		Content   string `json:"content"`
+		Scheduled string `json:"scheduled_at"`
+		Status    string `json:"status"`
+		Created   string `json:"created_at"`
+		Completed string `json:"completed_at"`
+		Cancelled string `json:"cancelled_at"`
+	}
+	if json.Unmarshal(b, &rows) != nil {
+		return
+	}
+	s.eventData.mu.Lock()
+	defer s.eventData.mu.Unlock()
+	for _, r := range rows {
+		x := &event{ID: r.ID, TargetDeviceID: r.Target, CreatorDeviceID: r.Creator, Content: r.Content, ScheduledAt: r.Scheduled, Status: r.Status, CreatedAt: r.Created, CompletedAt: r.Completed, CancelledAt: r.Cancelled}
+		s.eventData.events[x.ID] = x
+	}
+}
+
+func (s *sqliteStore) CreateEvent(target, creator, content, scheduled string) (event, error) {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	e, err := s.eventData.CreateEvent(target, creator, content, scheduled)
+	if err == nil {
+		q := fmt.Sprintf("INSERT INTO events(event_id,target_device_id,creator_device_id,content,scheduled_at,status,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s)", sqliteString(e.ID), sqliteString(e.TargetDeviceID), sqliteString(e.CreatorDeviceID), sqliteString(e.Content), sqliteString(e.ScheduledAt), sqliteString(e.Status), sqliteString(e.CreatedAt))
+		if _, x := s.exec(q); x != nil {
+			return event{}, x
+		}
+	}
+	return e, err
+}
+func (s *sqliteStore) ListEvents(device string) []event { return s.eventData.ListEvents(device) }
+func (s *sqliteStore) AllEvents() []event               { return s.eventData.AllEvents() }
+func (s *sqliteStore) SetEventStatus(id, device, status string) (event, error) {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	e, err := s.eventData.SetEventStatus(id, device, status)
+	if err == nil {
+		q := "UPDATE events SET status=" + sqliteString(e.Status) + ",completed_at=" + sqliteString(e.CompletedAt) + ",cancelled_at=" + sqliteString(e.CancelledAt) + " WHERE event_id=" + sqliteString(e.ID)
+		_, err = s.exec(q)
+	}
+	return e, err
+}
+func (s *sqliteStore) DueEvents(now time.Time) []event { return s.eventData.DueEvents(now) }
+func (s *sqliteStore) MarkOverdue(id string) (event, error) {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	e, err := s.eventData.MarkOverdue(id)
+	if err == nil {
+		_, err = s.exec("UPDATE events SET status='overdue' WHERE event_id=" + sqliteString(id))
+	}
+	return e, err
+}
+
 func (s *sqliteStore) exec(q string) ([]byte, error) {
 	cmd := exec.Command("sqlite3", "-json", s.path, q)
 	out, err := cmd.Output()

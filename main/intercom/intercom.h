@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 #include "chat_message.h"
 #include "protocol.h"
@@ -24,6 +25,7 @@ struct IntercomRoomOption {
   bool current = false;
   bool is_default = false;
 };
+struct IntercomEventOption { std::string id; std::string content; std::string scheduled_at; };
 
 class Intercom {
 public:
@@ -49,6 +51,13 @@ public:
   bool LeaveRoom();
   bool AcceptInvite();
   std::string ListRooms();
+  bool CreateEvent(const std::string &target, const std::string &content,
+                   const std::string &scheduled_at);
+  std::string ListEvents();
+  bool CompleteEvent(int index);
+  bool CancelEvent(int index);
+  int PendingEventCount() const { return pending_event_count_; }
+  void SetEventCount(int count) { pending_event_count_ = count; }
   // Room picker state is owned by the Application task.
   const std::vector<IntercomRoomOption> &RoomOptions() const {
     return room_options_;
@@ -61,6 +70,11 @@ public:
   uint32_t RoomPickerRevision() const { return room_picker_revision_; }
   void SelectRoom(const std::string &id);
   void CloseRoomPicker();
+  bool EventPickerVisible() const { return event_picker_visible_; }
+  uint32_t EventPickerRevision() const { return event_picker_revision_; }
+  int EventPickerSeconds() const;
+  const std::vector<IntercomEventOption> &EventOptions() const { return event_options_; }
+  void CloseEventPicker() { event_picker_visible_ = false; ++event_picker_revision_; }
   bool AuthError() const { return auth_error_; }
   void MarkAuthError() { auth_error_ = true; }
   // Called by MCP on the Application task; caller owns the returned JSON.
@@ -76,11 +90,17 @@ public:
 
 private:
   void ShowRoomPicker(const std::string &response, uint32_t generation);
+  void ShowEventPicker(const std::string &response);
   std::vector<IntercomRoomOption> room_options_;
   std::atomic<uint32_t> room_picker_generation_{0};
   uint32_t room_picker_revision_ = 0;
   bool room_picker_visible_ = false;
+  bool event_picker_visible_ = false;
+  int64_t event_picker_deadline_ = 0;
+  uint32_t event_picker_revision_ = 0;
+  std::vector<IntercomEventOption> event_options_;
   std::atomic<bool> auth_error_{false};
+  int pending_event_count_ = 0;
   int64_t room_picker_deadline_ = 0;
   std::string room_picker_pending_;
   std::string room_picker_error_;
@@ -141,6 +161,11 @@ private:
   std::atomic<bool> start_sent_{false};
   std::mutex control_mutex_;
   std::mutex rooms_mutex_;
+  std::mutex events_mutex_;
+  std::condition_variable events_cv_;
+  std::string events_request_id_;
+  std::string events_response_;
+  std::unordered_set<std::string> pending_event_ids_;
   std::condition_variable rooms_cv_;
   std::string rooms_request_id_;
   std::string rooms_response_;
