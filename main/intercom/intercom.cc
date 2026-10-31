@@ -27,6 +27,9 @@ constexpr int kSamples = kFrameMs * kSampleRate / 1000;
 constexpr size_t kRealtimeFrameQueue = 12;
 constexpr int kJitterFrames = 8;
 constexpr char kTag[] = "Intercom";
+static const char *I18n(const Intercom &i, const char *zh, const char *en) {
+  return i.Language() == "en-US" ? en : zh;
+}
 
 void LogConfig(const char *source, const std::string &id,
                const std::string &url) {
@@ -134,6 +137,12 @@ bool Intercom::SetHosted(bool enabled) {
   QueueText(enabled ? "{\"type\":\"set_hosting\",\"enabled\":true}"
                     : "{\"type\":\"set_hosting\",\"enabled\":false}");
   return true;
+}
+
+bool Intercom::SetLanguage(const std::string &language) {
+  if (language != "zh-CN" && language != "en-US") return false;
+  if (!ws_ || !ws_->IsConnected()) return false;
+  return SendText("{\"type\":\"set_language\",\"language\":\"" + language + "\"}");
 }
 
 const char *Intercom::Status() const {
@@ -258,7 +267,7 @@ void Intercom::ShowRoomPicker(const std::string &response,
     return;
   auto rooms = cJSON_GetObjectItem(json, "rooms");
   if (!cJSON_IsTrue(cJSON_GetObjectItem(json, "ok")) || !cJSON_IsArray(rooms)) {
-    Board::GetInstance().GetDisplay()->ShowNotification("房间查询失败");
+    Board::GetInstance().GetDisplay()->ShowNotification(I18n(*this, "房间查询失败", "Room query failed"));
     cJSON_Delete(json);
     return;
   }
@@ -286,7 +295,7 @@ void Intercom::ShowRoomPicker(const std::string &response,
   }
   cJSON_Delete(json);
   if (room_options_.empty()) {
-    Board::GetInstance().GetDisplay()->ShowNotification("暂无可加入房间");
+    Board::GetInstance().GetDisplay()->ShowNotification(I18n(*this, "暂无可加入房间", "No rooms available"));
     return;
   }
   room_picker_visible_ = true;
@@ -297,7 +306,7 @@ void Intercom::SelectRoom(const std::string &id) {
   if (!room_picker_visible_ || RoomPickerPending())
     return;
   if (!network_ || state_ != State::Ready) {
-    room_picker_error_ = "对讲忙，请稍后操作";
+    room_picker_error_ = I18n(*this, "对讲忙，请稍后操作", "Intercom busy, try again");
     return;
   }
   for (const auto &room : room_options_) {
@@ -439,6 +448,9 @@ void Intercom::HandleChatEvent(const cJSON *json) {
   bool announce =
       cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "announce"));
   message.id = stringField("message_id");
+  message.parent_id = stringField("parent_message_id");
+  message.language = stringField("language");
+  message.audio_kind = stringField("audio_kind");
   message.source = stringField("source_id");
   message.text = stringField("text");
   message.status = stringField("asr_status");
@@ -559,14 +571,14 @@ void Intercom::PlayChatMessage(const std::string &id) {
     delete work;
     replay_task_active_ = false;
     StopChatReplay();
-    Board::GetInstance().GetDisplay()->ShowNotification("无法启动语音回放");
+    Board::GetInstance().GetDisplay()->ShowNotification(I18n(*this, "无法启动语音回放", "Unable to start playback"));
   }
 }
 
 void Intercom::ReplayTask(std::string url, uint32_t generation) {
   auto http = Board::GetInstance().GetNetwork()->CreateHttp(4);
   bool success = false;
-  std::string error = "语音下载失败";
+  std::string error = I18n(*this, "语音下载失败", "Audio download failed");
   const int64_t deadline = esp_timer_get_time() + 40 * 1000000LL;
   auto cancelled = [&]() {
     return replay_generation_ != generation || esp_timer_get_time() > deadline;
@@ -592,7 +604,7 @@ void Intercom::ReplayTask(std::string url, uint32_t generation) {
     if (!cancelled() && http->Open("GET", url)) {
       auto status = http->GetStatusCode();
       if (status && *status == 410)
-        error = "语音已过期";
+        error = I18n(*this, "语音已过期", "Audio expired");
       uint8_t header[16];
       if (status && *status == 200 && readExact(header, sizeof(header)) &&
           memcmp(header, "AIR1", 4) == 0 && le32(header + 4) == 16000 &&
@@ -647,7 +659,7 @@ void Intercom::ReplayTask(std::string url, uint32_t generation) {
       return;
     ESP_LOGI(kTag, "Chat replay download finished: success=%d", success);
     if (!success) {
-      if (error == "语音已过期") {
+      if (error == I18n(*this, "语音已过期", "Audio expired")) {
         for (auto &m : chat_messages_)
           if (m.id == replay_message_)
             m.available = false;
@@ -805,6 +817,10 @@ void Intercom::PlaybackDrained() {
     playback_ended_at_ = 0;
     SetState(State::Ready);
     ResumeAssistantAudio();
+    if (!pending_incoming_control_.empty()) {
+      auto control = std::move(pending_incoming_control_);
+      OnData(control.data(), control.size(), false);
+    }
   }
 }
 
@@ -1078,7 +1094,7 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
     return;
   }
   if (!strcmp(name, "event_execute")) {
-    const char *content = cJSON_IsString(cJSON_GetObjectItem(json, "content")) ? cJSON_GetObjectItem(json, "content")->valuestring : "请处理事件";
+    const char *content = cJSON_IsString(cJSON_GetObjectItem(json, "content")) ? cJSON_GetObjectItem(json, "content")->valuestring : I18n(*this, "请处理事件", "Please handle the event");
     const char *eid = cJSON_IsString(cJSON_GetObjectItem(json, "event_id")) ? cJSON_GetObjectItem(json, "event_id")->valuestring : "";
     std::string id_copy = eid, text_copy = content;
     app_.Schedule([this, id_copy, text_copy]() { Board::GetInstance().GetDisplay()->ShowNotification(text_copy); if (!id_copy.empty()) SendText("{\"type\":\"event_execute_ack\",\"event_id\":\"" + id_copy + "\",\"ok\":true}"); });
@@ -1086,7 +1102,7 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
   if (!strcmp(name, "event_state") || !strcmp(name, "event_notification") || !strcmp(name, "event_complete_ack") || !strcmp(name, "event_cancel_ack")) {
     auto event_id_value = cJSON_GetObjectItem(json, "event_id");
     std::string event_id = cJSON_IsString(event_id_value) ? event_id_value->valuestring : "";
-    const char *content = cJSON_IsString(cJSON_GetObjectItem(json, "content")) ? cJSON_GetObjectItem(json, "content")->valuestring : "事件状态已更新";
+    const char *content = cJSON_IsString(cJSON_GetObjectItem(json, "content")) ? cJSON_GetObjectItem(json, "content")->valuestring : I18n(*this, "事件状态已更新", "Event status updated");
     const char *event_status = cJSON_IsString(cJSON_GetObjectItem(json, "status")) ? cJSON_GetObjectItem(json, "status")->valuestring : "";
     bool terminal = !strcmp(name, "event_complete_ack") || !strcmp(name, "event_cancel_ack") || !strcmp(event_status, "completed") || !strcmp(event_status, "cancelled") || !strcmp(event_status, "overdue");
     std::string text = content;
@@ -1138,7 +1154,7 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
         CloseRoomPicker();
       } else if (failed) {
         room_picker_pending_.clear();
-        room_picker_error_ = "切换失败，请重试";
+        room_picker_error_ = I18n(*this, "切换失败，请重试", "Switch failed, try again");
         room_picker_deadline_ = esp_timer_get_time() + 15 * 1000000LL;
       }
     });
@@ -1155,11 +1171,29 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
                   : "托管设置失败，请检查服务端配置");
     });
   }
+  if (!strcmp(name, "language_state")) {
+    bool success = cJSON_IsTrue(ok);
+    auto language = cJSON_GetObjectItemCaseSensitive(json, "language");
+    std::string next = cJSON_IsString(language) ? language->valuestring : "";
+    app_.Schedule([this, success, next]() {
+      if (success && (next == "zh-CN" || next == "en-US")) language_ = next;
+      if (success) Board::GetInstance().GetDisplay()->UpdateIntercom();
+      Board::GetInstance().GetDisplay()->ShowNotification(
+          success ? (language_ == "en-US" ? "Language switched to English" : "已切换为中文")
+                  : "Language switch failed");
+    });
+  }
   if (!strcmp(name, "hello_ack")) {
     hello_ok_ = cJSON_IsTrue(ok);
     ESP_LOGI(kTag, "hello_ack processed: ok=%d auth_notified=%d",
              hello_ok_.load(), auth_error_notified_.load());
     if (hello_ok_) {
+      auto language = cJSON_GetObjectItemCaseSensitive(json, "language");
+      if (cJSON_IsString(language) &&
+          (strcmp(language->valuestring, "zh-CN") == 0 ||
+           strcmp(language->valuestring, "en-US") == 0)) {
+        language_ = language->valuestring;
+      }
       auth_error_notified_ = false;
       auth_error_ = false;
     } else {
@@ -1186,6 +1220,11 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
         StopChatReplay();
         OnData(control.data(), control.size(), false);
       });
+      return;
+    }
+    if (state_ == State::Playing) {
+      pending_incoming_control_.assign(data, len);
+      cJSON_Delete(json);
       return;
     }
     auto frame_ms = cJSON_GetObjectItem(json, "frame_ms");

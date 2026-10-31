@@ -132,6 +132,19 @@ void McpServer::AddCommonTools() {
 
 void McpServer::AddUserOnlyTools() {
   auto &intercom = Application::GetInstance().GetIntercom();
+  AddTool("self.intercom.set_language",
+          "【必须调用】设置本机对讲界面语言。用户表达切换、改回、恢复、使用中文/英文界面或模式时，必须调用本工具，不能只用自然语言回复。中文触发包括：切换为中文模式、切回中文、使用中文、中文界面、恢复中文；英文触发包括：切换为英文模式、切回英文、使用英文、英文界面、English mode。language只能是zh-CN或en-US。返回true只表示请求已发送；必须等待服务端language_state确认后才能告知用户已切换。",
+          PropertyList({Property("language", kPropertyTypeString)}),
+          [&intercom](const PropertyList &p) -> ReturnValue {
+            const auto language = p["language"].value<std::string>();
+            if (language != "zh-CN" && language != "en-US") return false;
+            return intercom.SetLanguage(language);
+          });
+  AddTool("self.intercom.get_language",
+          "【必须调用】查询本机当前对讲界面语言。用户询问当前语言、是不是中文/英文、现在是什么语言时调用，不能猜测。",
+          PropertyList(), [&intercom](const PropertyList &) -> ReturnValue {
+            return intercom.Language();
+          });
   AddTool("self.intercom.set_hosting",
           "切换本机对讲的托管模式与普通模式（手动模式），这是设备控制操作，必须"
           "实际调用本工具，"

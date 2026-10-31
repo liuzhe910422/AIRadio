@@ -45,6 +45,8 @@ public:
   bool CanRecord() const;
   bool IsHosted() const { return hosted_; }
   bool SetHosted(bool enabled);
+  bool SetLanguage(const std::string &language);
+  const std::string &Language() const { return language_; }
   bool CreateRoom(const std::string &name,
                   const std::vector<std::string> &invite_ids);
   bool JoinRoom(const std::string &code);
@@ -141,10 +143,12 @@ private:
   std::string id_;
   std::string url_;
   std::string api_key_;
+  std::string language_ = "zh-CN";
   std::string room_name_ = "默认房间";
   std::string message_id_;
   std::string incoming_id_;
   std::string incoming_source_id_;
+  std::string pending_incoming_control_;
   std::shared_ptr<WebSocket> ws_;
   uint16_t frame_lengths_[500] = {};
   int frame_count_ = 0;

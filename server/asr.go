@@ -80,6 +80,40 @@ func recognize(ctx context.Context, client *http.Client, cfg asrConfig, wav []by
 	}
 	return result.Choices[0].Message.Content, nil
 }
+func translateText(ctx context.Context, client *http.Client, cfg hostingConfig, text, target string) (string, error) {
+	prompt := "Translate the message into " + target + ". Return only the translation, with no explanations, labels, quotes, or extra sentences. Preserve names, numbers, locations, and operational instructions."
+	body := map[string]any{"model": cfg.Model, "stream": false, "messages": []any{map[string]string{"role": "system", "content": prompt}, map[string]string{"role": "user", "content": text}}, "max_tokens": 300}
+	b, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(b))
+	if err != nil {
+		return "", errors.New("invalid translation request")
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.Key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", errors.New("translation request failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("translation HTTP status %d", resp.StatusCode)
+	}
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result) != nil || len(result.Choices) == 0 {
+		return "", errors.New("invalid translation response")
+	}
+	out := strings.TrimSpace(result.Choices[0].Message.Content)
+	if out == "" || len([]rune(out)) > 512 {
+		return "", errors.New("invalid translation text")
+	}
+	return out, nil
+}
 func randomToken() string {
 	var b [24]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -91,8 +125,9 @@ func randomToken() string {
 // Completed messages are memory-only. Recipients are pinned to the connection
 // and room-view token at start, never rediscovered after ASR completes.
 type chatRecipient struct {
-	peer  *peer
-	token string
+	peer     *peer
+	token    string
+	language string
 }
 type chatMessage struct {
 	Automated     bool   `json:"automated,omitempty"`
@@ -102,6 +137,9 @@ type chatMessage struct {
 	Announce      bool   `json:"announce,omitempty"`
 	spokenText    string
 	ID            string    `json:"message_id"`
+	ParentID      string    `json:"parent_message_id,omitempty"`
+	Language      string    `json:"language,omitempty"`
+	AudioKind     string    `json:"audio_kind,omitempty"`
 	Room          string    `json:"room_id"`
 	Source        string    `json:"source_id"`
 	Created       string    `json:"created_at"`
@@ -119,23 +157,30 @@ type chatJob struct {
 	message *chatMessage
 	config  asrConfig
 }
+type translationJob struct {
+	message   *chatMessage
+	recipient chatRecipient
+	config    hostingConfig
+	tts       ttsConfig
+}
 type chatService struct {
-	hostingConfig hostingConfig
-	hostingJobs   chan hostingJob
-	ttsConfig     ttsConfig
-	ttsJobs       chan ttsJob
-	ttsClient     *http.Client
-	mu            sync.Mutex
-	config        asrConfig
-	messages      []*chatMessage
-	bytes         int
-	jobs          chan chatJob
-	slots         chan struct{}
-	client        *http.Client
+	hostingConfig   hostingConfig
+	hostingJobs     chan hostingJob
+	ttsConfig       ttsConfig
+	ttsJobs         chan ttsJob
+	translationJobs chan translationJob
+	ttsClient       *http.Client
+	mu              sync.Mutex
+	config          asrConfig
+	messages        []*chatMessage
+	bytes           int
+	jobs            chan chatJob
+	slots           chan struct{}
+	client          *http.Client
 }
 
 func newChatService() *chatService {
-	return &chatService{hostingConfig: defaultHostingConfig(), hostingJobs: make(chan hostingJob, 16), ttsConfig: defaultTTSConfig(), ttsJobs: make(chan ttsJob, 16), ttsClient: &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, config: asrConfig{Model: defaultASRModel}, jobs: make(chan chatJob, 16), slots: make(chan struct{}, 2), client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &chatService{hostingConfig: defaultHostingConfig(), hostingJobs: make(chan hostingJob, 16), ttsConfig: defaultTTSConfig(), ttsJobs: make(chan ttsJob, 16), translationJobs: make(chan translationJob, 16), ttsClient: &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, config: asrConfig{Model: defaultASRModel}, jobs: make(chan chatJob, 16), slots: make(chan struct{}, 2), client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // One dispatcher per running HTTP service, stopped along with its context.
@@ -159,6 +204,8 @@ func (c *chatService) run(ctx context.Context, s *server) {
 				return
 			}
 			go func() { defer func() { <-c.slots }(); c.process(ctx, s, job) }()
+		case job := <-c.translationJobs:
+			go c.processTranslation(ctx, s, job)
 		}
 	}
 }
@@ -218,7 +265,7 @@ func (s *server) completeChat(p *peer) {
 	if len(p.chatPackets) == 0 {
 		return
 	}
-	m := &chatMessage{ID: randomToken(), Room: p.chatRoom, Source: p.id, Created: time.Now().UTC().Format(time.RFC3339), Duration: p.frames * 60, Status: "disabled", Available: true, Expires: time.Now().Add(30 * time.Minute), packets: p.chatPackets, recipients: p.chatRecipients, size: p.bytes}
+	m := &chatMessage{ID: randomToken(), Room: p.chatRoom, Source: p.id, Language: s.store.DeviceLanguage(p.id), AudioKind: "original", Created: time.Now().UTC().Format(time.RFC3339), Duration: p.frames * 60, Status: "disabled", Available: true, Expires: time.Now().Add(30 * time.Minute), packets: p.chatPackets, recipients: p.chatRecipients, size: p.bytes}
 	p.chatPackets = nil
 	p.chatRecipients = nil
 	c := s.chat
@@ -309,7 +356,102 @@ func (c *chatService) process(ctx context.Context, s *server, job chatJob) {
 	s.sendChat(job.message, "chat_message_update")
 	if err == nil {
 		s.queueHosting(job.message)
+		c.queueTranslations(s, job.message)
 	}
+}
+func (c *chatService) queueTranslations(s *server, m *chatMessage) {
+	c.mu.Lock()
+	llm, tts := c.hostingConfig, c.ttsConfig
+	c.mu.Unlock()
+	if llm.Key == "" || llm.URL == "" || llm.Model == "" || !tts.Enabled || m.Text == "" {
+		return
+	}
+	for _, r := range m.recipients {
+		if r.language != "en-US" || r.peer.id == m.Source {
+			continue
+		}
+		select {
+		case c.translationJobs <- translationJob{m, r, llm, tts}:
+		default:
+			log.Printf("translation queue full message=%s", m.ID)
+		}
+	}
+}
+func (c *chatService) processTranslation(ctx context.Context, s *server, job translationJob) {
+	task, cancel := context.WithTimeout(ctx, 30*time.Second)
+	text, err := translateText(task, c.client, job.config, job.message.Text, "English")
+	cancel()
+	if err != nil {
+		log.Printf("translation failed message=%s: %v", job.message.ID, err)
+		return
+	}
+	task, cancel = context.WithTimeout(ctx, 45*time.Second)
+	wav, err := synthesize(task, c.ttsClient, job.tts, text)
+	cancel()
+	if err != nil {
+		return
+	}
+	packets, duration, err := ttsOpus(wav)
+	if err != nil {
+		return
+	}
+	m := &chatMessage{ID: randomToken(), ParentID: job.message.ID, Room: job.message.Room, Source: job.message.Source, Created: time.Now().UTC().Format(time.RFC3339), Duration: duration, Text: text, Status: "completed", Available: true, Language: "en-US", AudioKind: "translation", Expires: time.Now().Add(30 * time.Minute), packets: packets, recipients: []chatRecipient{job.recipient}}
+	for _, p := range packets {
+		m.size += len(p)
+	}
+	s.mu.Lock()
+	c.mu.Lock()
+	c.messages = append(c.messages, m)
+	c.pruneLocked(time.Now())
+	c.mu.Unlock()
+	s.sendChat(m, "chat_message")
+	s.mu.Unlock()
+	s.sendAutomatedAudio(m, packets)
+}
+
+func (s *server) sendAutomatedAudio(m *chatMessage, packets [][]byte) {
+	go func() {
+		synthetic := randomToken()
+		deadline := time.Now().Add(20 * time.Second)
+		for {
+			s.mu.Lock()
+			free := s.active == nil
+			s.mu.Unlock()
+			if free || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		s.mu.Lock()
+		p := m.recipients[0].peer
+		if s.peers[p.id] != p || p.playbackToken() != m.recipients[0].token {
+			s.mu.Unlock()
+			return
+		}
+		p.mu.Lock()
+		p.receiving = synthetic
+		p.ready = true
+		p.mu.Unlock()
+		p.send(control{Type: "start", SourceID: m.Source, MessageID: synthetic, FrameMS: 60, SampleRate: 16000})
+		s.mu.Unlock()
+		for _, packet := range packets {
+			s.mu.Lock()
+			if s.peers[p.id] == p {
+				p.enqueue(websocket.BinaryMessage, packet)
+			}
+			s.mu.Unlock()
+			time.Sleep(60 * time.Millisecond)
+		}
+		s.mu.Lock()
+		if s.peers[p.id] == p {
+			p.mu.Lock()
+			p.receiving = ""
+			p.ready = false
+			p.mu.Unlock()
+			p.send(control{Type: "end", MessageID: synthetic, FrameCount: len(packets)})
+		}
+		s.mu.Unlock()
+	}()
 }
 func (p *peer) playbackToken() string {
 	p.chatTokenMu.Lock()

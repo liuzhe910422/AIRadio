@@ -1,6 +1,6 @@
 # 灵矽对讲服务协议
 
-状态：当前服务端实现协议，包含房间、浏览器模拟器、会话记录、托管及动态控制台用户；核对日期 2026-10-24。
+状态：当前服务端实现协议，包含房间、浏览器模拟器、会话记录、托管、设备语言及动态控制台用户；核对日期 2026-10-31。
 
 本文以 `server/api.go`、`server/main.go` 和内置 Web 页面为准，集中描述 HTTP 和 WebSocket 接口。服务默认使用明文 HTTP/WebSocket，仅适合可信内网测试。
 
@@ -80,6 +80,7 @@
 | `last_ip` | string | 最近 hello 的 RemoteAddr，可能含端口；经过代理时可能为代理地址 |
 | `online` | boolean | 当前是否存在在线 WebSocket |
 | `room_id` | string | 当前逻辑房间 ID |
+| `language` | string | 设备界面语言：`zh-CN` 或 `en-US` |
 
 ### 2.5 `POST /api/rooms/{room_id}/close`
 
@@ -130,7 +131,7 @@
 成功返回：
 
 ```json
-{"type":"hello_ack","ok":true,"room_id":"default","room_name":"默认房间"}
+{"type":"hello_ack","ok":true,"room_id":"default","room_name":"默认房间","language":"zh-CN"}
 ```
 
 失败返回 `ok:false` 和 `error`，例如重复 ID、非法 ID、版本不支持或连接达到上限；连接随后关闭。
@@ -152,6 +153,7 @@
 | `receivers` | integer | end_ack 实际确认接收者数 |
 | `room_id` | string | 房间 ID |
 | `room_name` | string | 房间名称 |
+| `language` | string | 设备界面语言：`zh-CN` 或 `en-US` |
 | `code` | string | 房间四位加入码（1000～9999） |
 | `name` | string | 创建房间名称 |
 | `device_ids` | string[] | 创建房间时的成员列表 |
@@ -159,6 +161,22 @@
 未列出的字段会被忽略或按消息类型处理；未知 `type` 会返回 error 并中止当前会话。
 
 ## 4. 房间控制消息
+
+### 4.0 设备语言
+
+设备可通过已注册的 WebSocket 请求切换自身界面语言：
+
+```json
+{"type":"set_language","language":"en-US"}
+```
+
+当前只接受 `zh-CN` 和 `en-US`。服务端按连接身份保存语言并返回：
+
+```json
+{"type":"language_state","ok":true,"language":"en-US"}
+```
+
+失败时返回 `ok:false,error`。语言也会在 `hello_ack` 的 `language` 字段中返回。语言状态保存在设备表，不写入设备 NVS。
 
 ### 4.1 `create_room`
 

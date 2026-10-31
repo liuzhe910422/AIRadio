@@ -26,6 +26,20 @@ static uint16_t *trans_act;
 static uint16_t *trans_buf_1;
 static uint16_t *trans_buf_2;
 
+static bool English(const Intercom &intercom) { return intercom.Language() == "en-US"; }
+static const char *StatusText(const Intercom &intercom) {
+  if (!English(intercom)) return intercom.Status();
+  const auto status = std::string(intercom.Status());
+  if (status == "托管模式") return "Hosted mode";
+  if (status == "对讲未配置") return "Intercom not configured";
+  if (status == "对讲未连接") return "Intercom disconnected";
+  if (status == "对讲连接中") return "Connecting intercom";
+  if (status == "开始对讲") return "Start intercom";
+  if (status == "说话中") return "Speaking";
+  if (status == "语音回放中") return "Playing audio";
+  return "Intercom unavailable";
+}
+
 void CustomLcdDisplay::SetupUI() {
   LcdDisplay::SetupUI();
   if (!Lock(1000))
@@ -42,7 +56,8 @@ void CustomLcdDisplay::SetupUI() {
   lv_obj_set_style_text_color(panel, lv_color_hex(0x17332D), 0);
   lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
   auto title = lv_label_create(panel);
-  lv_label_set_text(title, "对讲记录");
+  chat_title_ = title;
+  lv_label_set_text(title, English(Application::GetInstance().GetIntercom()) ? "Intercom history" : "对讲记录");
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
   chat_list_ = lv_obj_create(panel);
   lv_obj_set_size(chat_list_, 282, 270);
@@ -60,13 +75,13 @@ void CustomLcdDisplay::SetupUI() {
   lv_obj_set_style_bg_color(intercom_bar_, lv_color_hex(0xF4F7F6), 0);
   lv_obj_set_style_pad_all(intercom_bar_, 8, 0);
   device_status_label_ = lv_label_create(intercom_bar_);
-  lv_label_set_text(device_status_label_, "设备：未配置");
+  lv_label_set_text(device_status_label_, English(Application::GetInstance().GetIntercom()) ? "Device: not configured" : "设备：未配置");
   lv_obj_set_width(device_status_label_, 164);
   lv_label_set_long_mode(device_status_label_, LV_LABEL_LONG_WRAP);
   lv_obj_set_height(device_status_label_, 54);
   lv_obj_align(device_status_label_, LV_ALIGN_TOP_LEFT, 0, 4);
   intercom_status_label_ = lv_label_create(intercom_bar_);
-  lv_label_set_text(intercom_status_label_, "对讲状态\n房间：默认房间");
+  lv_label_set_text(intercom_status_label_, English(Application::GetInstance().GetIntercom()) ? "Intercom status\nRoom: default" : "对讲状态\n房间：默认房间");
   lv_obj_set_width(intercom_status_label_, 164);
   lv_obj_align(intercom_status_label_, LV_ALIGN_TOP_LEFT, 0, 68);
   intercom_button_ = lv_button_create(intercom_bar_);
@@ -98,7 +113,8 @@ void CustomLcdDisplay::UpdateIntercom() {
   if (!intercom_label_ || !Lock(100))
     return;
   auto &intercom = Application::GetInstance().GetIntercom();
-  lv_label_set_text(intercom_label_, intercom.Status());
+  if (chat_title_) lv_label_set_text(chat_title_, English(intercom) ? "Intercom history" : "对讲记录");
+  lv_label_set_text(intercom_label_, StatusText(intercom));
   lv_obj_set_style_bg_color(
       intercom_button_, lv_color_hex(intercom.IsHosted() ? 0xE6B83D : 0x3187C8),
       0);
@@ -109,15 +125,15 @@ void CustomLcdDisplay::UpdateIntercom() {
     const auto speaker = intercom.SpeakingDeviceId();
     const std::string status =
         intercom.AuthError()
-            ? "API Key错误"
-            : (speaker.empty() ? intercom.Status() : "说话中：" + speaker);
+            ? (English(intercom) ? "API key error" : "API Key错误")
+            : (speaker.empty() ? StatusText(intercom) : (English(intercom) ? "Speaking: " + speaker : "说话中：" + speaker));
     std::string text =
-        "对讲状态\n房间：" + std::string(intercom.RoomName()) + "\n" + status;
+        (English(intercom) ? "Intercom status\nRoom: " : "对讲状态\n房间：") + std::string(intercom.RoomName()) + "\n" + status;
     lv_label_set_text(intercom_status_label_, text.c_str());
   }
   if (device_status_label_) {
     const char *device_id = intercom.DeviceId();
-    lv_label_set_text_fmt(device_status_label_, "设备：%s\n待处理事件：%d条",
+    lv_label_set_text_fmt(device_status_label_, English(intercom) ? "Device: %s\nPending events: %d" : "设备：%s\n待处理事件：%d条",
                           device_id[0] ? device_id : "未配置",
                           intercom.PendingEventCount());
   }
@@ -133,6 +149,7 @@ void CustomLcdDisplay::UpdateIntercom() {
 
 void CustomLcdDisplay::UpdateEventPicker() {
   auto &intercom = Application::GetInstance().GetIntercom();
+  const bool english = English(intercom);
   if (!intercom.EventPickerVisible()) {
     if (event_picker_)
       lv_obj_delete(event_picker_);
@@ -141,7 +158,7 @@ void CustomLcdDisplay::UpdateEventPicker() {
   }
   if (event_picker_ && event_picker_revision_ == intercom.EventPickerRevision()) {
     if (event_picker_title_)
-      lv_label_set_text_fmt(event_picker_title_, "待处理事件 · %d秒", intercom.EventPickerSeconds());
+      lv_label_set_text_fmt(event_picker_title_, english ? "Pending events · %ds" : "待处理事件 · %d秒", intercom.EventPickerSeconds());
     return;
   }
   if (event_picker_)
@@ -158,7 +175,7 @@ void CustomLcdDisplay::UpdateEventPicker() {
   lv_obj_set_style_bg_color(panel, lv_color_hex(0xF4F7F6), 0);
   auto title = lv_label_create(panel);
   event_picker_title_ = title;
-  lv_label_set_text_fmt(title, "待处理事件 · %d秒", intercom.EventPickerSeconds());
+  lv_label_set_text_fmt(title, english ? "Pending events · %ds" : "待处理事件 · %d秒", intercom.EventPickerSeconds());
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 8);
   auto close = lv_button_create(panel);
   lv_obj_set_size(close, 48, 40);
@@ -185,11 +202,12 @@ void CustomLcdDisplay::UpdateEventPicker() {
     lv_obj_set_width(label, LV_PCT(100));
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
   }
-  lv_label_set_text_fmt(title, "待处理事件 · %d秒", intercom.EventPickerSeconds());
+  lv_label_set_text_fmt(title, english ? "Pending events · %ds" : "待处理事件 · %d秒", intercom.EventPickerSeconds());
 }
 
 void CustomLcdDisplay::UpdateRoomPicker() {
   auto &intercom = Application::GetInstance().GetIntercom();
+  const bool english = English(intercom);
   if (!intercom.RoomPickerVisible()) {
     if (room_picker_)
       lv_obj_delete(room_picker_);
@@ -247,9 +265,7 @@ void CustomLcdDisplay::UpdateRoomPicker() {
       auto label = lv_label_create(button);
       lv_obj_set_width(label, LV_PCT(100));
       lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-      const std::string text =
-          room.code.empty() ? room.name
-                            : room.name + "（加入码：" + room.code + "）";
+      const std::string text = room.code.empty() ? room.name : room.name + (english ? " (code: " : "（加入码：") + room.code + (english ? ")" : "）");
       lv_label_set_text(label, text.c_str());
       auto id = new std::string(room.id);
       lv_obj_add_event_cb(
@@ -268,14 +284,14 @@ void CustomLcdDisplay::UpdateRoomPicker() {
     }
   }
   if (intercom.RoomPickerPending()) {
-    lv_label_set_text_fmt(room_picker_title_, "正在切换… %d秒",
+    lv_label_set_text_fmt(room_picker_title_, english ? "Switching… %ds" : "正在切换… %d秒",
                           intercom.RoomPickerSeconds());
   } else if (!intercom.RoomPickerError().empty()) {
-    lv_label_set_text_fmt(room_picker_title_, "%s · %d秒",
+    lv_label_set_text_fmt(room_picker_title_, english ? "%s · %ds" : "%s · %d秒",
                           intercom.RoomPickerError().c_str(),
                           intercom.RoomPickerSeconds());
   } else {
-    lv_label_set_text_fmt(room_picker_title_, "选择房间 · %d秒",
+    lv_label_set_text_fmt(room_picker_title_, english ? "Select room · %ds" : "选择房间 · %d秒",
                           intercom.RoomPickerSeconds());
   }
   const auto count = lv_obj_get_child_count(room_picker_list_);
@@ -324,7 +340,7 @@ void CustomLcdDisplay::UpdateChatRecords() {
   const auto &messages = intercom.ChatMessages();
   if (messages.empty()) {
     auto empty = lv_label_create(chat_list_);
-    lv_label_set_text(empty, "暂无对讲记录");
+      lv_label_set_text(empty, English(intercom) ? "No intercom messages" : "暂无对讲记录");
   }
   for (const auto &message : messages) {
     auto button = lv_button_create(chat_list_);
@@ -347,15 +363,17 @@ void CustomLcdDisplay::UpdateChatRecords() {
     auto label = lv_label_create(button);
     lv_obj_set_width(label, LV_PCT(100));
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-    std::string text =
-        (message.event_notification ? "事件通知" : (message.system ? "房间通知" : (message.own ? "我" : message.source))) +
+    const bool english = English(intercom);
+    const std::string sender = message.event_notification ? (english ? "Event" : "事件通知") : (message.system ? (english ? "Room notice" : "房间通知") : (message.own ? (english ? "Me" : "我") : message.source));
+    std::string text = sender +
         " · " +
-        (message.automated ? std::string("托管回复 · ") : std::string()) +
-        std::to_string((message.duration_ms + 999) / 1000) + "秒" +
-        (playing ? " · 点击停止" : " · 点击播放") + "\n";
+        (message.automated ? (english ? std::string("Hosted reply · ") : std::string("托管回复 · ")) : std::string()) +
+        std::to_string((message.duration_ms + 999) / 1000) + (english ? "s" : "秒") +
+        (playing ? (english ? " · Stop" : " · 点击停止") : (english ? " · Play" : " · 点击播放")) + "\n";
+    if (message.audio_kind == "translation") text += english ? "Translation\n" : "翻译\n";
     text += !message.text.empty()
                 ? message.text
-                : (message.status == "pending" ? "正在识别…" : "语音消息");
+                : (message.status == "pending" ? (english ? "Recognizing…" : "正在识别…") : (english ? "Voice message" : "语音消息"));
     lv_label_set_text(label, text.c_str());
     auto id = new std::string(message.id);
     lv_obj_add_event_cb(

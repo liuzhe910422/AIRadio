@@ -199,7 +199,7 @@ func (c *chatService) processHosting(ctx context.Context, s *server, j hostingJo
 	targets := []*peer{}
 	for _, p := range s.peers {
 		if s.store.CurrentRoom(p.id).ID == j.room {
-			recipients = append(recipients, chatRecipient{p, p.playbackToken()})
+			recipients = append(recipients, chatRecipient{p, p.playbackToken(), s.store.DeviceLanguage(p.id)})
 			targets = append(targets, p)
 			p.mu.Lock()
 			p.receiving = synthetic.sending

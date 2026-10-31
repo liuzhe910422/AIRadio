@@ -4,6 +4,9 @@
 
 struct IntercomChatMessage {
   std::string id;
+  std::string parent_id;
+  std::string language;
+  std::string audio_kind;
   std::string source;
   std::string text;
   std::string status;

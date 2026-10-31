@@ -152,7 +152,7 @@ func (s *server) notifyEvent(e event, target, kind, text string) {
 	if !p.chatEnabled {
 		return
 	}
-	m := &chatMessage{ID: randomToken(), Room: s.store.CurrentRoom(target).ID, Source: e.CreatorDeviceID, Created: time.Now().UTC().Format(time.RFC3339), Text: text, Status: "completed", Expires: time.Now().Add(30 * time.Minute), recipients: []chatRecipient{{p, p.playbackToken()}}, EventKind: "event_" + kind, spokenText: text}
+	m := &chatMessage{ID: randomToken(), Room: s.store.CurrentRoom(target).ID, Source: e.CreatorDeviceID, Created: time.Now().UTC().Format(time.RFC3339), Text: text, Status: "completed", Expires: time.Now().Add(30 * time.Minute), recipients: []chatRecipient{{p, p.playbackToken(), s.store.DeviceLanguage(p.id)}}, EventKind: "event_" + kind, spokenText: text}
 	s.chat.mu.Lock()
 	cfg := s.chat.ttsConfig
 	s.chat.messages = append(s.chat.messages, m)
