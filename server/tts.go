@@ -176,23 +176,44 @@ func (s *server) roomNotice(target *peer, r room, actor, kind string) {
 		return
 	}
 	view := s.store.CurrentRoom(target.id).ID
+	english := s.store.DeviceLanguage(target.id) == "en-US"
 	text := "设备" + actor + "加入了" + r.Name + "。"
 	spoken := "设备" + spokenDevice(actor) + "加入了" + r.Name + "。"
+	if english {
+		text = "Device " + actor + " joined " + r.Name + "."
+		spoken = text
+	}
 	if kind == "room_invite" {
-		text = "设备" + actor + "邀请你加入" + r.Name + "。"
-		spoken = "设备" + spokenDevice(actor) + "邀请你加入" + r.Name + "。"
+		if english {
+			text = "Device " + actor + " invited you to join " + r.Name + "."
+		} else {
+			text = "设备" + actor + "邀请你加入" + r.Name + "。"
+		}
+		spoken = text
 	} else if kind == "member_online" {
-		text = "设备" + actor + "已上线，当前在" + r.Name + "。"
-		spoken = "设备" + spokenDevice(actor) + "已上线，当前在" + r.Name + "。"
+		if english {
+			text = "Device " + actor + " is online in " + r.Name + "."
+		} else {
+			text = "设备" + actor + "已上线，当前在" + r.Name + "。"
+		}
+		spoken = text
 		if target.id == actor {
-			text = "你已上线，当前在" + r.Name + "。"
+			if english {
+				text = "You are online in " + r.Name + "."
+			} else {
+				text = "你已上线，当前在" + r.Name + "。"
+			}
 			spoken = text
 		}
 	} else if target.id == actor {
-		text = "你已加入" + r.Name + "。"
+		if english {
+			text = "You joined " + r.Name + "."
+		} else {
+			text = "你已加入" + r.Name + "。"
+		}
 		spoken = text
 	}
-	m := &chatMessage{ID: randomToken(), Room: view, Source: actor, Created: time.Now().UTC().Format(time.RFC3339), Text: text, Status: "completed", Expires: time.Now().Add(30 * time.Minute), recipients: []chatRecipient{{target, target.playbackToken()}}, EventKind: kind, EventRoom: r.ID, EventRoomName: r.Name, spokenText: spoken}
+	m := &chatMessage{ID: randomToken(), Room: view, Source: actor, Created: time.Now().UTC().Format(time.RFC3339), Text: text, Status: "completed", Expires: time.Now().Add(30 * time.Minute), recipients: []chatRecipient{{target, target.playbackToken(), s.store.DeviceLanguage(target.id)}}, EventKind: kind, EventRoom: r.ID, EventRoomName: r.Name, spokenText: spoken}
 	c := s.chat
 	c.mu.Lock()
 	cfg := c.ttsConfig

@@ -16,6 +16,7 @@ public:
 
 private:
   lv_obj_t *chat_list_ = nullptr;
+  lv_obj_t *chat_title_ = nullptr;
   uint32_t chat_revision_ = UINT32_MAX;
   void UpdateChatRecords();
   void UpdateRoomPicker();

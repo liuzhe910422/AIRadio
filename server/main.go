@@ -57,6 +57,7 @@ type control struct {
 	Code            string        `json:"code,omitempty"`
 	Name            string        `json:"name,omitempty"`
 	DeviceIDs       []string      `json:"device_ids,omitempty"`
+	Language        string        `json:"language,omitempty"`
 	InviteDeviceIDs []string      `json:"invite_device_ids,omitempty"`
 	EventID         string        `json:"event_id,omitempty"`
 	Content         string        `json:"content,omitempty"`
@@ -284,10 +285,10 @@ func (s *server) start(p *peer, c control) {
 	s.active = p
 	p.chatRoom = s.store.CurrentRoom(p.id).ID
 	p.chatPackets = nil
-	p.chatRecipients = []chatRecipient{{p, p.playbackToken()}}
+	p.chatRecipients = []chatRecipient{{p, p.playbackToken(), s.store.DeviceLanguage(p.id)}}
 	for _, other := range s.peers {
 		if other != p && s.store.CurrentRoom(other.id).ID == p.chatRoom {
-			p.chatRecipients = append(p.chatRecipients, chatRecipient{other, other.playbackToken()})
+			p.chatRecipients = append(p.chatRecipients, chatRecipient{other, other.playbackToken(), s.store.DeviceLanguage(other.id)})
 		}
 	}
 	s.started = time.Now()
@@ -501,6 +502,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	current := s.store.CurrentRoom(p.id)
 	ack := answer("hello_ack", "", true, "")
 	ack.RoomID, ack.RoomName = current.ID, current.Name
+	ack.Language = s.store.DeviceLanguage(p.id)
 	ack.ChatSessionID, ack.PlaybackToken = p.playbackToken(), p.playbackToken()
 	p.send(ack)
 	s.syncEvents(p)
@@ -531,6 +533,16 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch c.Type {
+		case "set_language":
+			if c.Language != "zh-CN" && c.Language != "en-US" {
+				p.send(control{Type: "language_state", OK: boolPtr(false), Error: "unsupported language"})
+				break
+			}
+			if err := s.store.SetDeviceLanguage(p.id, c.Language); err != nil {
+				p.send(control{Type: "language_state", OK: boolPtr(false), Error: "failed to save language"})
+				break
+			}
+			p.send(control{Type: "language_state", OK: boolPtr(true), Language: s.store.DeviceLanguage(p.id)})
 		case "set_hosting":
 			s.mu.Lock()
 			if c.Enabled == nil || s.active == p {

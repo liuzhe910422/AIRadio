@@ -47,7 +47,7 @@ func TestChatPublicPlaybackAndConfigMask(t *testing.T) {
 	s.peers[p.id] = p
 	s.store.RegisterDevice(p.id, "")
 	token := p.playbackToken()
-	s.chat.messages = []*chatMessage{{ID: "message", Room: "default", Expires: time.Now().Add(time.Minute), recipients: []chatRecipient{{p, token}}, packets: [][]byte{{1, 2}}}}
+	s.chat.messages = []*chatMessage{{ID: "message", Room: "default", Expires: time.Now().Add(time.Minute), recipients: []chatRecipient{{peer: p, token: token}}, packets: [][]byte{{1, 2}}}}
 	api := &apiServer{s: s, sessions: map[string]time.Time{"test": time.Now().Add(time.Hour)}}
 	request := httptest.NewRequest("GET", "/api/intercom/messages/message/audio", nil)
 	w := httptest.NewRecorder()

@@ -102,6 +102,30 @@ func TestSQLiteMembershipSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestDeviceLanguagePersistsAndNormalizes(t *testing.T) {
+	s := newSQLiteTestStore(t)
+	s.RegisterDevice("lang-device", "")
+	if got := s.DeviceLanguage("lang-device"); got != "zh-CN" {
+		t.Fatalf("default language = %q", got)
+	}
+	if err := s.SetDeviceLanguage("lang-device", "en-US"); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := newSQLiteStore(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.DeviceLanguage("lang-device"); got != "en-US" {
+		t.Fatalf("restored language = %q", got)
+	}
+	if err := restored.SetDeviceLanguage("lang-device", "fr-FR"); err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.DeviceLanguage("lang-device"); got != "zh-CN" {
+		t.Fatalf("unsupported language was not normalized: %q", got)
+	}
+}
+
 func TestSQLiteConcurrentMembership(t *testing.T) {
 	s := newSQLiteTestStore(t)
 	var wg sync.WaitGroup

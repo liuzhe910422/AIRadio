@@ -47,6 +47,7 @@ type device struct {
 	IP         string `json:"last_ip"`
 	Online     bool   `json:"online"`
 	RoomID     string `json:"room_id"`
+	Language   string `json:"language"`
 }
 
 type roomStore interface {
@@ -64,6 +65,8 @@ type roomStore interface {
 	CreateSimulator(id string) error
 	DeleteSimulator(id string) error
 	ListDevices() []device
+	DeviceLanguage(id string) string
+	SetDeviceLanguage(id, language string) error
 }
 
 type memoryStore struct {
@@ -74,6 +77,12 @@ type memoryStore struct {
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{rooms: map[string]*room{"default": {ID: "default", Name: "默认房间", Default: true}}, devices: map[string]*device{}}
+}
+func normalizeLanguage(language string) string {
+	if language == "en-US" {
+		return "en-US"
+	}
+	return "zh-CN"
 }
 func (s *memoryStore) RegisterDevice(id, ip string, deviceType ...string) room {
 	s.mu.Lock()
@@ -89,6 +98,9 @@ func (s *memoryStore) RegisterDevice(id, ip string, deviceType ...string) room {
 	d.LastSeen = time.Now().UTC().Format(time.RFC3339)
 	d.IP = ip
 	d.Online = true
+	if d.Language == "" {
+		d.Language = "zh-CN"
+	}
 	return s.currentLocked(id)
 }
 func (s *memoryStore) currentLocked(id string) room {
@@ -268,6 +280,27 @@ func (s *memoryStore) ListDevices() []device {
 	return out
 }
 
+func (s *memoryStore) DeviceLanguage(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if d := s.devices[id]; d != nil {
+		return normalizeLanguage(d.Language)
+	}
+	return "zh-CN"
+}
+func (s *memoryStore) SetDeviceLanguage(id, language string) error {
+	language = normalizeLanguage(language)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d := s.devices[id]
+	if d == nil {
+		d = &device{ID: id}
+		s.devices[id] = d
+	}
+	d.Language = language
+	return nil
+}
+
 type sqliteStore struct {
 	// Serialize each mutation with its persistence to preserve write order.
 	persistMu sync.Mutex
@@ -286,10 +319,11 @@ func newSQLiteStore(path string) (*sqliteStore, error) {
 	if err := s.initAdmin(); err != nil {
 		return nil, err
 	}
-	if _, err := s.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS devices(device_id TEXT PRIMARY KEY,last_seen_at TEXT,ip TEXT,room_id TEXT); CREATE TABLE IF NOT EXISTS rooms(id TEXT PRIMARY KEY,name TEXT,join_code TEXT UNIQUE,is_default INTEGER,status TEXT,created_by TEXT,invite_device_ids TEXT DEFAULT ''); CREATE TABLE IF NOT EXISTS events(event_id TEXT PRIMARY KEY,target_device_id TEXT NOT NULL,creator_device_id TEXT NOT NULL,content TEXT NOT NULL,scheduled_at TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,completed_at TEXT,cancelled_at TEXT);`); err != nil {
+	if _, err := s.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS devices(device_id TEXT PRIMARY KEY,last_seen_at TEXT,ip TEXT,room_id TEXT,language TEXT NOT NULL DEFAULT 'zh-CN'); CREATE TABLE IF NOT EXISTS rooms(id TEXT PRIMARY KEY,name TEXT,join_code TEXT UNIQUE,is_default INTEGER,status TEXT,created_by TEXT,invite_device_ids TEXT DEFAULT ''); CREATE TABLE IF NOT EXISTS events(event_id TEXT PRIMARY KEY,target_device_id TEXT NOT NULL,creator_device_id TEXT NOT NULL,content TEXT NOT NULL,scheduled_at TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,completed_at TEXT,cancelled_at TEXT);`); err != nil {
 		return nil, err
 	}
 	_, _ = s.exec(`ALTER TABLE devices ADD COLUMN device_type TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.exec(`ALTER TABLE devices ADD COLUMN language TEXT NOT NULL DEFAULT 'zh-CN'`)
 	_, _ = s.exec(`ALTER TABLE rooms ADD COLUMN invite_device_ids TEXT DEFAULT ''`)
 	_, err := s.exec(`INSERT OR IGNORE INTO rooms(id,name,join_code,is_default,status,created_by) VALUES('default','默认房间','',1,'active','')`)
 	if err == nil {
@@ -385,7 +419,7 @@ func (s *sqliteStore) persistDevice(id string) {
 	}
 	d := *stored
 	s.mu.Unlock()
-	q := fmt.Sprintf("INSERT INTO devices(device_id,last_seen_at,ip,room_id,device_type) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(device_id) DO UPDATE SET last_seen_at=excluded.last_seen_at,ip=excluded.ip,room_id=excluded.room_id,device_type=excluded.device_type", sqliteString(d.ID), sqliteString(d.LastSeen), sqliteString(d.IP), sqliteString(d.RoomID), sqliteString(d.DeviceType))
+	q := fmt.Sprintf("INSERT INTO devices(device_id,last_seen_at,ip,room_id,device_type,language) VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(device_id) DO UPDATE SET last_seen_at=excluded.last_seen_at,ip=excluded.ip,room_id=excluded.room_id,device_type=excluded.device_type,language=excluded.language", sqliteString(d.ID), sqliteString(d.LastSeen), sqliteString(d.IP), sqliteString(d.RoomID), sqliteString(d.DeviceType), sqliteString(normalizeLanguage(d.Language)))
 	if _, err := s.exec(q); err != nil {
 		log.Printf("debug sqlite persist device=%s error=%v", id, err)
 	}
@@ -415,20 +449,21 @@ func (s *sqliteStore) load() {
 	} else {
 		log.Printf("debug sqlite load rooms error=%v", err)
 	}
-	if b, err := s.exec("SELECT device_id,last_seen_at,ip,COALESCE(room_id,'') AS room_id,device_type FROM devices"); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+	if b, err := s.exec("SELECT device_id,last_seen_at,ip,COALESCE(room_id,'') AS room_id,device_type,COALESCE(language,'zh-CN') AS language FROM devices"); err == nil && len(strings.TrimSpace(string(b))) > 0 {
 		var rows []struct {
 			ID         string `json:"device_id"`
 			Seen       string `json:"last_seen_at"`
 			IP         string `json:"ip"`
 			RoomID     string `json:"room_id"`
 			DeviceType string `json:"device_type"`
+			Language   string `json:"language"`
 		}
 		if e := json.Unmarshal(b, &rows); e != nil {
 			log.Printf("debug sqlite load devices error=%v output=%s", e, b)
 		} else {
 			log.Printf("debug sqlite loaded devices=%d", len(rows))
 			for _, row := range rows {
-				s.devices[row.ID] = &device{ID: row.ID, LastSeen: row.Seen, IP: row.IP, RoomID: row.RoomID, DeviceType: row.DeviceType}
+				s.devices[row.ID] = &device{ID: row.ID, LastSeen: row.Seen, IP: row.IP, RoomID: row.RoomID, DeviceType: row.DeviceType, Language: normalizeLanguage(row.Language)}
 				if row.RoomID != "" && s.rooms[row.RoomID] != nil {
 					s.rooms[row.RoomID].Devices = append(s.rooms[row.RoomID].Devices, row.ID)
 				}
@@ -450,6 +485,16 @@ func (s *sqliteStore) RegisterDevice(id, ip string, deviceType ...string) room {
 	r := s.memoryStore.RegisterDevice(id, ip, deviceType...)
 	s.persistDevice(id)
 	return r
+}
+func (s *sqliteStore) DeviceLanguage(id string) string { return s.memoryStore.DeviceLanguage(id) }
+func (s *sqliteStore) SetDeviceLanguage(id, language string) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	if err := s.memoryStore.SetDeviceLanguage(id, language); err != nil {
+		return err
+	}
+	s.persistDevice(id)
+	return nil
 }
 func (s *sqliteStore) Join(id, code string) (room, error) {
 	s.persistMu.Lock()

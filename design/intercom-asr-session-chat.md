@@ -1,6 +1,6 @@
 # 对讲 ASR 与会话内聊天记录设计
 
-状态：服务端 ASR、控制台配置 tab、临时音频缓存和消息推送已实现；3.5B 固件右侧彩色文字按钮及点击回放已接入并完成实机联调。已实现接口见 [intercom-protocol.md](intercom-protocol.md)，固件界面见 [intercom-ui-480x320.md](intercom-ui-480x320.md)。
+状态：服务端 ASR、控制台配置 tab、临时音频缓存、消息推送及按设备语言的英文翻译已实现；3.5B 固件右侧彩色文字按钮、点击回放和翻译音频排队已接入。已实现接口见 [intercom-protocol.md](intercom-protocol.md)，多语言设计见 [intercom-language-translation.md](intercom-language-translation.md)。
 
 ## 1. 目标与范围
 
@@ -124,6 +124,9 @@ URL、Key 等统一在此 tab 保存和查看配置状态，避免散落在房�
 | created_at | string | 服务端 UTC RFC3339 时间 |
 | duration_ms | integer | 按实际音频帧计算的时长 |
 | text | string | UTF-8 显示摘要 |
+| parent_message_id | string | 翻译消息对应的原始消息 ID；原始消息省略 |
+| language | string | 消息语言；翻译消息为 `en-US` |
+| audio_kind | string | `original` 或 `translation` |
 | text_truncated | boolean | 是否因显示上限截断 |
 | asr_status | string | pending / completed / failed / disabled |
 | audio_available | boolean | 当前是否还可回放 |
