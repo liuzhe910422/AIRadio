@@ -6,7 +6,7 @@
 
 设备通过已有的 `self.camera.take_photo` 拍照。拍照成功后，固件将最近一帧编码为 JPEG，上传到 Intercom Server，并向当前房间广播图片消息。房间内设备收到消息后，在对讲记录中显示“收到一张图片”和缩略图；点击图片记录或缩略图可打开大图弹窗，弹窗右上角的 `X` 关闭后返回主界面。
 
-图片广播与小智 MCP 会话、实时 Opus 对讲使用独立链路。图片内容不放进 WebSocket 控制帧；控制帧只携带图片 URL 和消息元数据。
+图片广播与小智 MCP 会话、实时 Opus 对讲使用独立链路。系统视觉告警也复用这条图片链路：只有 VLLM 判断命中后才向目标房间广播图片 URL。图片内容不放进 WebSocket 控制帧；控制帧只携带图片 URL 和消息元数据。
 
 ## 2. 数据流程
 
@@ -20,6 +20,17 @@ MCP self.camera.take_photo
   -> 设备保存临时聊天记录
   -> 下载 JPEG、解码、显示缩略图
   -> 点击记录或缩略图，下载并显示大图弹窗
+
+系统视觉告警流程为：
+
+```text
+服务端定时器
+  -> 指定设备 alert_capture_request(image)
+  -> 设备拍照并上传 JPEG
+  -> 服务端下载并转 Base64 调用托管 LLM
+  -> VLLM alert=true
+  -> 广播 image_message URL、文字和 TTS
+```
 ```
 
 设备从已配置的 Intercom WebSocket 地址派生图片 HTTP 地址：`ws://` 转为 `http://`，`wss://` 转为 `https://`，并保留服务器 IP 和端口。
@@ -46,7 +57,7 @@ MCP self.camera.take_photo
 
 `Camera` 增加 `GetCapturedJpeg()`。`EspVideo` 使用现有 JPEG 编码器将最近捕获帧转换为 JPEG。MCP 拍照工具保留原有照片解释返回，同时尝试把 JPEG 发送到 Intercom；图片广播失败不会阻止照片解释结果返回。
 
-`IntercomChatMessage` 增加图片 URL、尺寸和图片标记。收到 `image_message` 后，固件将相对 URL 转换为 HTTP(S) 完整 URL，并加入最多20条的当前聊天记录。
+`IntercomChatMessage` 增加图片 URL、尺寸和图片标记。收到 `image_message` 后，固件将相对 URL 转换为 HTTP(S) 完整 URL，并加入当前聊天记录。告警图片只有 VLLM 命中后才广播。
 
 3.5B 显示层在独立任务中下载图片并调用 JPEG 解码器。缩略图和大图当前均使用 JPEG 解码后的 RGB565 缓冲；弹窗使用独立 LVGL 容器和关闭按钮。网络回调不直接操作 LVGL。
 

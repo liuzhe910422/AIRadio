@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <cstring>
 
+extern "C" bool AiradioGetDht11(float *temperature, float *humidity) __attribute__((weak));
+
 namespace {
 constexpr size_t kMaxBytes = 512 * 1024;
 constexpr int kMaxFrames = 500;
@@ -993,6 +995,20 @@ bool Intercom::SendImage(const std::string &jpeg) {
   return ok;
 }
 
+bool Intercom::SendAlertImage(const std::string &jpeg, std::string &url) {
+  if (!jpeg.empty() && network_ && !url_.empty()) {
+    std::string http_url = url_;
+    if (http_url.rfind("ws://", 0) == 0) http_url.replace(0, 5, "http://");
+    else if (http_url.rfind("wss://", 0) == 0) http_url.replace(0, 6, "https://");
+    auto slash = http_url.find('/', http_url.find("://") + 3);
+    if (slash != std::string::npos) http_url.resize(slash);
+    http_url += "/api/intercom/images";
+    auto http = Board::GetInstance().GetNetwork()->CreateHttp(4); if (!http) return false;
+    const std::string boundary = "----AIRADIO_IMAGE_BOUNDARY"; http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary); http->SetHeader("X-Device-Id", id_); if (!http->Open("POST", http_url)) return false;
+    std::string head = "--"+boundary+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\"alert.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n"; if (!http->Write(head.data(),head.size())||!http->Write(jpeg.data(),jpeg.size())) {http->Close();return false;} std::string tail="\r\n--"+boundary+"--\r\n"; if(!http->Write(tail.data(),tail.size())){http->Close();return false;} auto status=http->GetStatusCode(); if(!status||*status!=200){http->Close();return false;} auto response=http->ReadAll();http->Close(); cJSON* root=cJSON_Parse(response.c_str());if(!root)return false;auto item=cJSON_GetObjectItem(root,"image_url");bool ok=cJSON_IsString(item)&&item->valuestring[0];if(ok)url=item->valuestring;cJSON_Delete(root);return ok;
+  } return false;
+}
+
 void Intercom::QueueText(std::string text) {
   std::lock_guard<std::mutex> lock(control_mutex_);
   if (pending_control_.size() < 8)
@@ -1122,6 +1138,34 @@ void Intercom::OnData(const char *data, size_t len, bool binary) {
   auto type = cJSON_GetObjectItem(json, "type");
   auto id = cJSON_GetObjectItem(json, "message_id");
   auto ok = cJSON_GetObjectItem(json, "ok");
+  if (cJSON_IsString(type) && !strcmp(type->valuestring, "alert_capture_request")) {
+    auto req = cJSON_GetObjectItem(json, "request_id");
+    auto kind = cJSON_GetObjectItem(json, "content");
+    if (cJSON_IsString(req) && cJSON_IsString(kind)) {
+      std::string request_id = req->valuestring, capture = kind->valuestring;
+      app_.Schedule([this, request_id, capture]() {
+        std::unique_lock<std::mutex> capture_lock(alert_capture_mutex_, std::try_to_lock);
+        cJSON *reply = cJSON_CreateObject();
+        cJSON_AddStringToObject(reply, "type", "alert_capture_response");
+        cJSON_AddStringToObject(reply, "request_id", request_id.c_str());
+        bool success = capture_lock.owns_lock();
+        if (success && capture == "image") {
+          auto camera = Board::GetInstance().GetCamera();
+          std::string jpeg, image_url;
+          success = camera && camera->Capture() && camera->GetCapturedJpeg(jpeg) && SendAlertImage(jpeg, image_url);
+          if (success) cJSON_AddStringToObject(reply, "image_url", image_url.c_str());
+        } else if (success && capture == "sensor" && AiradioGetDht11) {
+          float temperature = 0, humidity = 0;
+          success = AiradioGetDht11(&temperature, &humidity);
+          if (success) { cJSON_AddNumberToObject(reply, "temperature", temperature); cJSON_AddNumberToObject(reply, "humidity", humidity); }
+        }
+        cJSON_AddBoolToObject(reply, "ok", success);
+        char *raw = cJSON_PrintUnformatted(reply); if (raw) { SendText(raw); cJSON_free(raw); } cJSON_Delete(reply);
+      });
+    }
+    cJSON_Delete(json);
+    return;
+  }
   HandleChatEvent(json);
   auto room_name = cJSON_GetObjectItem(json, "room_name");
   const char *name = cJSON_IsString(type) ? type->valuestring : "";

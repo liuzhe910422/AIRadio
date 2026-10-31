@@ -303,7 +303,9 @@ static bool encode_with_hw_jpeg(const uint8_t* src, size_t src_len, uint16_t wid
     enc_cfg.image_quality = quality;
     enc_cfg.sub_sample = (enc_src_type == JPEG_ENCODE_IN_FORMAT_GRAY) ? JPEG_DOWN_SAMPLING_GRAY : JPEG_DOWN_SAMPLING_YUV422;
 
-    size_t out_cap = (size_t)width * (size_t)height * 3 / 2 + 64 * 1024;
+    // Alert frames are uploaded at moderate quality. Keep the encoder buffer
+    // bounded so a camera capture cannot consume the remaining PSRAM.
+    size_t out_cap = (size_t)width * (size_t)height + 32 * 1024;
     if (out_cap < 128 * 1024)
         out_cap = 128 * 1024;
     jpeg_encode_memory_alloc_cfg_t jpeg_enc_output_mem_cfg = { .buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER };
@@ -381,7 +383,7 @@ static bool encode_with_esp_new_jpeg(const uint8_t* src, size_t src_len, uint16_
     }
 
     // 估算输出缓冲区：宽高的 1.5 倍 + 64KB
-    size_t out_cap = (size_t)width * (size_t)height * 3 / 2 + 64 * 1024;
+    size_t out_cap = (size_t)width * (size_t)height + 32 * 1024;
     if (out_cap < 128 * 1024)
         out_cap = 128 * 1024;
     uint8_t* outbuf = (uint8_t*)malloc_psram(out_cap);

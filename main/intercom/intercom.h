@@ -90,6 +90,7 @@ public:
   void PlayChatMessage(const std::string &id);
   void StopChatReplay();
   bool SendImage(const std::string &jpeg);
+  bool SendAlertImage(const std::string &jpeg, std::string &url);
 
 private:
   void ShowRoomPicker(const std::string &response, uint32_t generation);
@@ -165,6 +166,7 @@ private:
   std::atomic<bool> end_pending_{false};
   std::atomic<bool> start_sent_{false};
   std::mutex control_mutex_;
+  std::mutex alert_capture_mutex_;
   std::mutex rooms_mutex_;
   std::mutex events_mutex_;
   std::condition_variable events_cv_;

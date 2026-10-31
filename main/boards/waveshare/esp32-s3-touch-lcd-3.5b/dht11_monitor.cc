@@ -217,6 +217,15 @@ Dht11Reading GetDht11Reading() {
     return latest_reading;
 }
 
+extern "C" bool AiradioGetDht11(float *temperature, float *humidity) {
+  if (!temperature || !humidity) return false;
+  auto r = GetDht11Reading();
+  if (!r.valid) return false;
+  *temperature = r.temperature;
+  *humidity = r.humidity;
+  return true;
+}
+
 void StartDht11Monitor(gpio_num_t pin) {
     if (xTaskCreate(MonitorTask, "dht11", 4096, reinterpret_cast<void*>(static_cast<intptr_t>(pin)),
                     1, nullptr) != pdPASS) {
