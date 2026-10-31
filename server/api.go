@@ -328,6 +328,10 @@ func (a *apiServer) handler(w http.ResponseWriter, r *http.Request) {
 		a.ttsConfig(w, r)
 	case r.URL.Path == "/api/tts/test":
 		a.ttsTest(w, r)
+	case r.URL.Path == "/api/alerts":
+		a.alerts(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/alerts/"):
+		a.alertAction(w, r)
 	case r.URL.Path == "/api/asr/config":
 		a.asrConfig(w, r)
 	case r.URL.Path == "/api/asr/test":
@@ -399,4 +403,136 @@ func (a *apiServer) eventAction(w http.ResponseWriter, r *http.Request) {
 	a.s.notifyEvent(e, e.TargetDeviceID, "cancelled", eventText(e, "事件已取消"))
 	a.s.notifyEvent(e, e.CreatorDeviceID, "cancelled", eventText(e, "事件已取消"))
 	a.json(w, e)
+}
+
+func (a *apiServer) alerts(w http.ResponseWriter, r *http.Request) {
+	if !a.auth(w, r) {
+		return
+	}
+	s := a.s.alerts
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r.Method == http.MethodGet {
+		if r.URL.Query().Get("records") == "1" {
+			a.json(w, s.records)
+			return
+		}
+		out := make([]alertRule, 0, len(s.rules))
+		for _, x := range s.rules {
+			out = append(out, x)
+		}
+		a.json(w, out)
+		return
+	}
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		w.WriteHeader(405)
+		return
+	}
+	var x alertRule
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768)).Decode(&x) != nil {
+		http.Error(w, "invalid alert", 400)
+		return
+	}
+	if x.ID == "" {
+		x.ID = "alert-" + randomToken()[:12]
+	}
+	if x.Name == "" || x.RoomID == "" || x.DeviceID == "" || (x.Type != "vision" && x.Type != "temperature" && x.Type != "humidity") || x.Interval < 10 || x.Interval > 86400 {
+		http.Error(w, "invalid alert fields", 400)
+		return
+	}
+	if x.Type == "vision" && len(x.Prompt) > 12000 {
+		http.Error(w, "prompt too long", 400)
+		return
+	}
+	found := false
+	for _, d := range a.s.store.ListDevices() {
+		if d.ID == x.DeviceID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "device not found", 400)
+		return
+	}
+	roomFound := false
+	for _, rr := range a.s.store.ListRooms() {
+		if rr.ID == x.RoomID {
+			roomFound = true
+			break
+		}
+	}
+	if !roomFound {
+		http.Error(w, "room not found", 400)
+		return
+	}
+	if x.Type == "vision" && x.Prompt == "" {
+		http.Error(w, "vision prompt required", 400)
+		return
+	}
+	if x.Type == "temperature" && x.TempAbove == nil && x.TempBelow == nil || x.Type == "humidity" && x.HumAbove == nil && x.HumBelow == nil {
+		http.Error(w, "sensor threshold required", 400)
+		return
+	}
+	if x.TempAbove != nil && x.TempBelow != nil && *x.TempBelow >= *x.TempAbove {
+		http.Error(w, "invalid temperature thresholds", 400)
+		return
+	}
+	if x.HumAbove != nil && x.HumBelow != nil && *x.HumBelow >= *x.HumAbove {
+		http.Error(w, "invalid humidity thresholds", 400)
+		return
+	}
+	if len([]rune(x.Name)) > 80 || len([]rune(x.Message)) > 300 {
+		http.Error(w, "text too long", 400)
+		return
+	}
+	if x.Type == "vision" {
+		x.TempAbove = nil
+		x.TempBelow = nil
+		x.HumAbove = nil
+		x.HumBelow = nil
+	}
+	if x.Type == "temperature" {
+		x.HumAbove = nil
+		x.HumBelow = nil
+	}
+	if x.Type == "humidity" {
+		x.TempAbove = nil
+		x.TempBelow = nil
+	}
+	x.ID = x.Type
+	s.rules[x.ID] = x
+	if err := s.saveLocked(); err != nil {
+		http.Error(w, "cannot save alerts", 500)
+		return
+	}
+	a.json(w, x)
+}
+
+func (a *apiServer) alertAction(w http.ResponseWriter, r *http.Request) {
+	if !a.auth(w, r) {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/alerts/")
+	a.s.alerts.mu.Lock()
+	defer a.s.alerts.mu.Unlock()
+	if r.Method == http.MethodDelete {
+		delete(a.s.alerts.rules, id)
+		if err := a.s.alerts.saveLocked(); err != nil {
+			http.Error(w, "cannot save alerts", 500)
+			return
+		}
+		a.json(w, map[string]bool{"ok": true})
+		return
+	}
+	if r.Method == http.MethodGet {
+		x, ok := a.s.alerts.rules[id]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		a.json(w, x)
+		return
+	}
+	http.Error(w, "method not allowed", 405)
 }

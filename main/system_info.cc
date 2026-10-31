@@ -148,9 +148,17 @@ void SystemInfo::PrintTaskList() {
 }
 
 void SystemInfo::PrintHeapStats() {
-    int free_sram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    int min_free_sram = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-    ESP_LOGI(TAG, "free sram: %u minimal sram: %u", free_sram, min_free_sram);
+    const size_t free_sram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t largest_sram = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    const size_t min_free_sram = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    const size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    const size_t largest_psram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    const size_t min_free_psram = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+    ESP_LOGI(TAG,
+             "heap sram free=%u largest=%u minimum=%u; psram free=%u largest=%u minimum=%u",
+             static_cast<unsigned>(free_sram), static_cast<unsigned>(largest_sram),
+             static_cast<unsigned>(min_free_sram), static_cast<unsigned>(free_psram),
+             static_cast<unsigned>(largest_psram), static_cast<unsigned>(min_free_psram));
 }
 
 void SystemInfo::PrintPmLocks() {

@@ -67,6 +67,9 @@ type control struct {
 	Status          string        `json:"status,omitempty"`
 	ImageURL        string        `json:"image_url,omitempty"`
 	Text            string        `json:"text,omitempty"`
+	AlertID         string        `json:"alert_id,omitempty"`
+	Temperature     *float64      `json:"temperature,omitempty"`
+	Humidity        *float64      `json:"humidity,omitempty"`
 	Events          *[]event      `json:"events,omitempty"`
 	Index           int           `json:"index,omitempty"`
 }
@@ -197,13 +200,16 @@ type server struct {
 	events         eventStore
 	eventMu        sync.Mutex
 	eventReminders map[string]string
+	alerts         *alertService
 	authMu         sync.RWMutex
 	authEnabled    bool
 	authKey        string
 }
 
 func newServer() *server {
-	return &server{chat: newChatService(), peers: make(map[string]*peer), images: make(map[string][]byte), slots: make(chan struct{}, maxConnections), store: newMemoryStore(), events: newMemoryEventStore(), eventReminders: map[string]string{}}
+	s := &server{chat: newChatService(), peers: make(map[string]*peer), images: make(map[string][]byte), slots: make(chan struct{}, maxConnections), store: newMemoryStore(), events: newMemoryEventStore(), eventReminders: map[string]string{}}
+	s.alerts = newAlertService(s)
+	return s
 }
 
 func (s *server) remove(p *peer) {
@@ -562,6 +568,8 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			s.mu.Unlock()
+		case "alert_capture_response":
+			s.alerts.response(p, c)
 		case "set_hosting":
 			s.mu.Lock()
 			if c.Enabled == nil || s.active == p {
@@ -760,6 +768,7 @@ func main() {
 	s.loadASRConfig()
 	s.loadTTSConfig()
 	s.loadHostingConfig()
+	s.alerts.load()
 	s.loadIntercomAuthConfig()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -767,6 +776,7 @@ func main() {
 	go s.chat.runTTS(ctx, s)
 	go s.chat.runHosting(ctx, s)
 	go s.runEvents()
+	go s.alerts.run(ctx)
 	log.Fatal(http.ListenAndServe(*addr, httpHandler(s)))
 }
 

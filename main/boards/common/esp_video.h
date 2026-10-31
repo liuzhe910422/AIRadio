@@ -4,6 +4,7 @@
 #include <lvgl.h>
 #include <memory>
 #include <thread>
+#include <mutex>
 #include <vector>
 
 #include <freertos/FreeRTOS.h>
@@ -42,6 +43,7 @@ private:
     std::string explain_url_;
     std::string explain_token_;
     std::thread encoder_thread_;
+    std::mutex capture_mutex_;
 
 public:
     EspVideo(const esp_video_init_config_t& config);
