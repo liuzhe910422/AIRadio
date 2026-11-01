@@ -18,20 +18,22 @@ import (
 )
 
 type alertRule struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Type      string   `json:"type"`
-	Enabled   bool     `json:"enabled"`
-	RoomID    string   `json:"room_id"`
-	DeviceID  string   `json:"device_id"`
-	Interval  int      `json:"interval_seconds"`
-	Prompt    string   `json:"prompt,omitempty"`
-	TempAbove *float64 `json:"temperature_above,omitempty"`
-	TempBelow *float64 `json:"temperature_below,omitempty"`
-	HumAbove  *float64 `json:"humidity_above,omitempty"`
-	HumBelow  *float64 `json:"humidity_below,omitempty"`
-	Message   string   `json:"message,omitempty"`
-	TTS       bool     `json:"tts"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Type         string   `json:"type"`
+	Enabled      bool     `json:"enabled"`
+	RoomID       string   `json:"room_id"`
+	DeviceID     string   `json:"device_id"`
+	Interval     int      `json:"interval_seconds"`
+	Prompt       string   `json:"prompt,omitempty"`
+	TempAbove    *float64 `json:"temperature_above,omitempty"`
+	TempBelow    *float64 `json:"temperature_below,omitempty"`
+	HumAbove     *float64 `json:"humidity_above,omitempty"`
+	HumBelow     *float64 `json:"humidity_below,omitempty"`
+	Message      string   `json:"message,omitempty"`
+	TTS          bool     `json:"tts"`
+	Handling     string   `json:"handling,omitempty"`
+	AgentSkillID string   `json:"agent_skill_id,omitempty"`
 }
 type alertRecord struct {
 	ID        string `json:"id"`
@@ -51,12 +53,26 @@ type alertService struct {
 	pending map[string]chan control
 	lastRun map[string]time.Time
 	records []alertRecord
+	active  map[string]bool
+}
+
+func boolValue(v *bool) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+func pointerValue(v *float64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
 }
 
 const defaultVisionAlertPrompt = `检测图片中是否出现火焰或火苗。只要画面中能看到火焰形状或火焰内容就必须告警，包括真实世界中的打火机火苗、火柴火焰、蜡烛火焰、明火、燃烧物火焰，也包括电脑、手机、平板、电视或显示器屏幕上显示的火焰图片、火焰视频、火灾画面或火焰缩略图。为了便于测试，屏幕上的火焰图片同样算告警。烟雾、红色物体、灯光、反光、热源和没有明显火焰形状的内容不要告警。检测到火焰或屏幕火焰内容时返回 alert=true，并在 message 中简短说明位置或类型；没有火焰时返回 alert=false。只返回 JSON：{"alert":true或false,"message":"..."}。`
 
 func newAlertService(s *server) *alertService {
-	return &alertService{s: s, rules: map[string]alertRule{"temperature": {ID: "temperature", Type: "temperature"}, "humidity": {ID: "humidity", Type: "humidity"}, "vision": {ID: "vision", Type: "vision"}}, pending: map[string]chan control{}, lastRun: map[string]time.Time{}, records: []alertRecord{}}
+	return &alertService{s: s, rules: map[string]alertRule{"temperature": {ID: "temperature", Type: "temperature"}, "humidity": {ID: "humidity", Type: "humidity"}, "vision": {ID: "vision", Type: "vision"}}, pending: map[string]chan control{}, lastRun: map[string]time.Time{}, records: []alertRecord{}, active: map[string]bool{}}
 }
 func (a *alertService) load() {
 	if db, ok := a.s.store.(*sqliteStore); ok {
@@ -67,12 +83,17 @@ func (a *alertService) load() {
 			}
 			if json.Unmarshal(b, &rows) == nil && len(rows) > 0 {
 				var saved struct {
-					Rules   []alertRule   `json:"rules"`
-					Records []alertRecord `json:"records"`
+					Rules   []alertRule     `json:"rules"`
+					Records []alertRecord   `json:"records"`
+					Active  map[string]bool `json:"active,omitempty"`
 				}
 				if json.Unmarshal([]byte(rows[0].Value), &saved) == nil {
 					for _, r := range saved.Rules {
+						if r.Handling != "agent" {
+							r.Handling = "direct"
+						}
 						a.rules[r.Type] = r
+						log.Printf("alert configuration loaded id=%s type=%s handling=%s enabled=%t", r.ID, r.Type, r.Handling, r.Enabled)
 					}
 					if v := a.rules["vision"]; v.Prompt == "" {
 						v.Prompt = defaultVisionAlertPrompt
@@ -80,6 +101,9 @@ func (a *alertService) load() {
 						_ = a.saveLocked()
 					}
 					a.records = saved.Records
+					if saved.Active != nil {
+						a.active = saved.Active
+					}
 				}
 			}
 		}
@@ -100,13 +124,15 @@ func (a *alertService) saveLocked() error {
 		rs = append(rs, r)
 	}
 	b, _ := json.Marshal(struct {
-		Rules   []alertRule   `json:"rules"`
-		Records []alertRecord `json:"records"`
-	}{rs, a.records})
+		Rules   []alertRule     `json:"rules"`
+		Records []alertRecord   `json:"records"`
+		Active  map[string]bool `json:"active,omitempty"`
+	}{rs, a.records, a.active})
 	_, e := db.exec("INSERT INTO service_config(name,value) VALUES('alerts'," + sqliteString(string(b)) + ") ON CONFLICT(name) DO UPDATE SET value=excluded.value")
 	return e
 }
 func (a *alertService) response(p *peer, c control) {
+	log.Printf("alert capture response device=%s request_id=%s ok=%v type=%s temperature=%v humidity=%v image_url=%q error=%q", p.id, c.RequestID, boolValue(c.OK), c.Content, pointerValue(c.Temperature), pointerValue(c.Humidity), c.ImageURL, c.Error)
 	a.mu.Lock()
 	ch := a.pending[c.RequestID]
 	a.mu.Unlock()
@@ -120,18 +146,21 @@ func (a *alertService) response(p *peer, c control) {
 }
 func (a *alertService) request(p *peer, typ string) (control, error) {
 	id := randomToken()
+	log.Printf("alert capture request device=%s request_id=%s content=%s", p.id, id, typ)
 	ch := make(chan control, 1)
 	a.mu.Lock()
 	a.pending[id] = ch
 	a.mu.Unlock()
 	defer func() { a.mu.Lock(); delete(a.pending, id); a.mu.Unlock() }()
 	if !p.send(control{Type: "alert_capture_request", RequestID: id, Content: typ}) {
+		log.Printf("alert capture request send failed device=%s request_id=%s content=%s", p.id, id, typ)
 		return control{}, errors.New("device unavailable")
 	}
 	select {
 	case c := <-ch:
 		return c, nil
 	case <-time.After(15 * time.Second):
+		log.Printf("alert capture timeout device=%s request_id=%s content=%s", p.id, id, typ)
 		return control{}, errors.New("capture timeout")
 	}
 }
@@ -175,6 +204,15 @@ func (a *alertService) evaluate(ctx context.Context, r alertRule) {
 	if e != nil || c.OK != nil && !(*c.OK) {
 		return
 	}
+	a.mu.Lock()
+	current, exists := a.rules[r.ID]
+	a.mu.Unlock()
+	if exists {
+		r = current
+	}
+	if !r.Enabled {
+		return
+	}
 	if r.Type == "vision" {
 		if c.ImageURL == "" {
 			return
@@ -188,8 +226,15 @@ func (a *alertService) evaluate(ctx context.Context, r alertRule) {
 		hit, msg := a.vision(ctx, r, data)
 		if hit {
 			a.broadcastImage(r, data, c.ImageURL)
+			a.activate(r)
 			a.record(r, "", "", c.ImageURL, msg)
-			a.notify(r, msg)
+			if r.Handling == "agent" {
+				a.s.agent.trigger(r, msg)
+			} else {
+				a.notify(r, msg)
+			}
+		} else {
+			a.recoverRule(r, "")
 		}
 	} else {
 		if c.Temperature == nil && c.Humidity == nil {
@@ -209,8 +254,16 @@ func (a *alertService) evaluate(ctx context.Context, r alertRule) {
 			if r.Type == "humidity" {
 				actual = fmt.Sprintf("%.1f", hum)
 			}
+			a.activate(r)
 			a.record(r, actual, threshold, "", msg)
-			a.notify(r, msg)
+			log.Printf("alert decision alert=%s type=%s handling=%s hit=true", r.ID, r.Type, r.Handling)
+			if r.Handling == "agent" {
+				a.s.agent.trigger(r, msg)
+			} else {
+				a.notify(r, msg)
+			}
+		} else if (r.Type == "temperature" && c.Temperature != nil) || (r.Type == "humidity" && c.Humidity != nil) {
+			a.recoverRule(r, "")
 		}
 	}
 }
@@ -325,10 +378,11 @@ func (a *alertService) notify(r alertRule, text string) {
 	room := r.RoomID
 	rec := []chatRecipient{}
 	for _, p := range a.s.peers {
-		if p.chatEnabled && a.s.store.CurrentRoom(p.id).ID == room {
+		if a.s.store.CurrentRoom(p.id).ID == room {
 			rec = append(rec, chatRecipient{p, p.playbackToken(), a.s.store.DeviceLanguage(p.id)})
 		}
 	}
+	log.Printf("alert broadcast room=%s recipients=%d text=%q", room, len(rec), text)
 	m := &chatMessage{ID: randomToken(), Room: room, Source: "system", Created: time.Now().UTC().Format(time.RFC3339), Text: text, Status: "completed", Available: true, Automated: true, EventKind: "alert", Expires: time.Now().Add(30 * time.Minute), recipients: rec, spokenText: text}
 	a.chatAddLocked(m)
 	a.s.sendChat(m, "chat_message")
@@ -367,4 +421,27 @@ func (a *alertService) chatAddLocked(m *chatMessage) {
 	a.s.chat.messages = append(a.s.chat.messages, m)
 	a.s.chat.pruneLocked(time.Now())
 	a.s.chat.mu.Unlock()
+}
+
+func (a *alertService) activate(r alertRule) {
+	a.mu.Lock()
+	a.active[r.ID] = true
+	_ = a.saveLocked()
+	a.mu.Unlock()
+}
+func (a *alertService) recoverRule(r alertRule, text string) {
+	a.mu.Lock()
+	if !a.active[r.ID] {
+		a.mu.Unlock()
+		return
+	}
+	delete(a.active, r.ID)
+	_ = a.saveLocked()
+	a.mu.Unlock()
+	a.s.agent.recoverAlert(r.ID)
+	if text == "" {
+		text = r.Name + "告警已恢复正常"
+	}
+	log.Printf("alert recovered alert=%s room=%s", r.ID, r.RoomID)
+	a.notify(alertRule{RoomID: r.RoomID, TTS: r.TTS}, text)
 }

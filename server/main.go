@@ -201,6 +201,7 @@ type server struct {
 	eventMu        sync.Mutex
 	eventReminders map[string]string
 	alerts         *alertService
+	agent          *agentService
 	authMu         sync.RWMutex
 	authEnabled    bool
 	authKey        string
@@ -209,6 +210,7 @@ type server struct {
 func newServer() *server {
 	s := &server{chat: newChatService(), peers: make(map[string]*peer), images: make(map[string][]byte), slots: make(chan struct{}, maxConnections), store: newMemoryStore(), events: newMemoryEventStore(), eventReminders: map[string]string{}}
 	s.alerts = newAlertService(s)
+	s.agent = newAgentService(s)
 	return s
 }
 
@@ -627,6 +629,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			p.send(control{Type: c.Type + "_ack", RequestID: c.RequestID, OK: boolPtr(true), EventID: e.ID, Status: e.Status})
 			s.notifyEvent(e, e.CreatorDeviceID, status, eventText(e, "事件已"+map[string]string{"completed": "完成", "cancelled": "取消"}[status]))
+			s.agent.eventCompleted(e.ID, e.Status)
 			if e.CreatorDeviceID != p.id {
 				s.notifyEvent(e, p.id, status, eventText(e, "事件已"+map[string]string{"completed": "完成", "cancelled": "取消"}[status]))
 			}
@@ -769,6 +772,7 @@ func main() {
 	s.loadTTSConfig()
 	s.loadHostingConfig()
 	s.alerts.load()
+	s.agent.load()
 	s.loadIntercomAuthConfig()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
