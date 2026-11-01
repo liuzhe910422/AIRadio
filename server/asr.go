@@ -314,7 +314,7 @@ func (s *server) completeChat(p *peer) {
 func (s *server) sendChat(m *chatMessage, kind string) {
 	for _, r := range m.recipients {
 		p := r.peer
-		if !p.chatEnabled || s.peers[p.id] != p || p.playbackToken() != r.token || s.store.CurrentRoom(p.id).ID != m.Room {
+		if (!p.chatEnabled && m.EventKind != "alert") || s.peers[p.id] != p || p.playbackToken() != r.token || s.store.CurrentRoom(p.id).ID != m.Room {
 			continue
 		}
 		b, _ := json.Marshal(m)

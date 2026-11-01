@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -43,7 +44,9 @@ func (a *apiServer) image(w http.ResponseWriter, r *http.Request) {
 		a.s.imageMu.Lock()
 		a.s.images[id] = data
 		a.s.imageMu.Unlock()
-		a.json(w, map[string]string{"image_url": "/api/intercom/images/" + id})
+		imageURL := "/api/intercom/images/" + id
+		a.s.agent.imageUploaded(r.Header.Get("X-Device-Id"), imageURL)
+		a.json(w, map[string]string{"image_url": imageURL})
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/intercom/images/")
@@ -330,6 +333,10 @@ func (a *apiServer) handler(w http.ResponseWriter, r *http.Request) {
 		a.ttsTest(w, r)
 	case r.URL.Path == "/api/alerts":
 		a.alerts(w, r)
+	case r.URL.Path == "/api/agent/skills":
+		a.agentSkills(w, r)
+	case r.URL.Path == "/api/agent/runs":
+		a.agentRuns(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/alerts/"):
 		a.alertAction(w, r)
 	case r.URL.Path == "/api/asr/config":
@@ -402,6 +409,7 @@ func (a *apiServer) eventAction(w http.ResponseWriter, r *http.Request) {
 	}
 	a.s.notifyEvent(e, e.TargetDeviceID, "cancelled", eventText(e, "事件已取消"))
 	a.s.notifyEvent(e, e.CreatorDeviceID, "cancelled", eventText(e, "事件已取消"))
+	a.s.agent.eventCompleted(e.ID, e.Status)
 	a.json(w, e)
 }
 
@@ -501,12 +509,79 @@ func (a *apiServer) alerts(w http.ResponseWriter, r *http.Request) {
 		x.TempBelow = nil
 	}
 	x.ID = x.Type
+	if x.Handling != "agent" {
+		x.Handling = "direct"
+	}
+	log.Printf("alert configuration saved id=%s type=%s handling=%s enabled=%t", x.ID, x.Type, x.Handling, x.Enabled)
 	s.rules[x.ID] = x
 	if err := s.saveLocked(); err != nil {
 		http.Error(w, "cannot save alerts", 500)
 		return
 	}
+	if x.Enabled {
+		go a.s.alerts.evaluate(context.Background(), x)
+	}
 	a.json(w, x)
+}
+
+func (a *apiServer) agentSkills(w http.ResponseWriter, r *http.Request) {
+	if !a.auth(w, r) {
+		return
+	}
+	if r.Method == http.MethodGet {
+		a.json(w, a.s.agent.listSkills())
+		return
+	}
+	if r.Method == http.MethodDelete {
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			http.Error(w, "id is required", 400)
+			return
+		}
+		a.s.agent.mu.Lock()
+		if _, ok := a.s.agent.skills[id]; !ok {
+			a.s.agent.mu.Unlock()
+			http.Error(w, "skill not found", 404)
+			return
+		}
+		delete(a.s.agent.skills, id)
+		err := a.s.agent.saveLocked()
+		a.s.agent.mu.Unlock()
+		if err != nil {
+			http.Error(w, "cannot save skill", 500)
+			return
+		}
+		a.json(w, map[string]bool{"ok": true})
+		return
+	}
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		w.WriteHeader(405)
+		return
+	}
+	var x agentSkill
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 65536)).Decode(&x) != nil || x.ID == "" || x.Name == "" || len(x.Steps) == 0 {
+		http.Error(w, "invalid skill", 400)
+		return
+	}
+	a.s.agent.mu.Lock()
+	a.s.agent.skills[x.ID] = x
+	err := a.s.agent.saveLocked()
+	a.s.agent.mu.Unlock()
+	if err != nil {
+		http.Error(w, "cannot save skill", 500)
+		return
+	}
+	a.json(w, x)
+}
+func (a *apiServer) agentRuns(w http.ResponseWriter, r *http.Request) {
+	if !a.auth(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.WriteHeader(405)
+		return
+	}
+	a.json(w, a.s.agent.runsList())
 }
 
 func (a *apiServer) alertAction(w http.ResponseWriter, r *http.Request) {
