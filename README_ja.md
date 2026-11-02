@@ -2,7 +2,7 @@
 
 （[English](README.md) | [中文](README_zh.md) | 日本語）
 
-<p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="Lingxi AIRadio システム構成" width="900"></p>
+<p align="center"><img src="homeweb/assets/airadio-architecture-ja.svg" alt="Lingxi AIRadio システム構成" width="900"></p>
 
 Lingxi AIRadio は、Lingxi/XiaoZhi 音声チャネルと ESP32 ファームウェアを基盤にした業務向けインターコムソリューションです。車両隊列、物流パーク、倉庫、現場チームを対象に、リアルタイム半二重通話、音声によるルーム操作、オンライン AI 管理応答、直近の会話確認を一つのワークフローにまとめます。
 
@@ -38,7 +38,7 @@ AIRadio は操作ごとに適した入力を使います。**即時発言は大�
 
 ## システム構成
 
-<p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="AIRadio システム構成" width="900"></p>
+<p align="center"><img src="homeweb/assets/airadio-architecture-ja.svg" alt="AIRadio システム構成" width="900"></p>
 
 AIRadio 端末は Intercom Service を経由せず、Lingxi 音声チャネルへ直接接続して音声操作を行います。Intercom Service は端末間のリアルタイム音声、ルーム、記録を担当します。
 
