@@ -2,7 +2,7 @@
 
 （[English](README.md) | 中文 | [日本語](README_ja.md)）
 
-<p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="灵矽 AIRadio 系统架构" width="900"></p>
+<p align="center"><img src="homeweb/assets/airadio-architecture-zh.svg" alt="灵矽 AIRadio 系统架构" width="900"></p>
 
 灵矽 AIRadio 是基于灵矽／小智语音通道与 ESP32 固件构建的行业对讲方案，面向车队、物流园区、仓储和临时协作现场。它把实时半双工对讲、语音房间管理、AI 在线托管和近期消息回顾放到同一条工作链路中。
 
@@ -47,7 +47,7 @@ AIRadio 的交互分工很明确：**即时发言用大按钮，复杂操作用�
 
 ## 系统架构
 
-<p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="AIRadio architecture" width="900"></p>
+<p align="center"><img src="homeweb/assets/airadio-architecture-zh.svg" alt="AIRadio 系统架构" width="900"></p>
 
 系统分为四层。需要特别说明的是：**AIRadio 终端直接通过灵矽语音通道完成语音交互和 MCP 操作，不经过 Intercom Service；Intercom Service 负责设备之间的实时对讲、房间和记录。**
 

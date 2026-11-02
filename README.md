@@ -8,7 +8,7 @@
 
 ([English](README.md) | [中文](README_zh.md) | [日本語](README_ja.md))
 
-<p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="Lingxi AIRadio system architecture" width="900"></p>
+<p align="center"><img src="homeweb/assets/airadio-architecture-en.svg" alt="Lingxi AIRadio system architecture" width="900"></p>
 
 Lingxi AIRadio is an industry intercom solution built on the Lingxi/XiaoZhi voice channel and ESP32 firmware. It is designed for fleets, logistics parks, warehouses, and temporary field teams. AIRadio combines real-time half-duplex voice, voice-controlled rooms, online AI hosting, and short-term conversation recall in one workflow.
 
@@ -53,7 +53,7 @@ Product page: [Open the AIRadio home page](http://154.94.238.56/).
 
 ## Architecture
 
-<p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="AIRadio architecture" width="900"></p>
+<p align="center"><img src="homeweb/assets/airadio-architecture-en.svg" alt="AIRadio architecture" width="900"></p>
 
 The system has four layers. One important separation is that **AIRadio devices connect directly to the Lingxi voice channel for voice interaction and MCP operations; the Intercom Service handles room audio, membership, and records between devices.**
 
