@@ -1,0 +1,89 @@
+name: Server CI
+
+on:
+  push:
+    paths:
+      - 'server/**'
+      - '.github/workflows/server-ci.yml'
+  pull_request:
+    paths:
+      - 'server/**'
+      - '.github/workflows/server-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build, test and coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: server
+        shell: bash
+    env:
+      CGO_ENABLED: '1'
+      AIRADIO_ASR_LIVE_TEST: '0'
+      AIRADIO_TTS_LIVE_TEST: '0'
+      AIRADIO_HOSTING_LIVE_TEST: '0'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential pkg-config libopus-dev libopusfile-dev sqlite3
+          pkg-config --modversion opus opusfile
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -o "$RUNNER_TEMP/airadio-server" .
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with coverage
+        run: go test -count=1 -timeout=5m -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Require at least 80% statement coverage
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          go tool cover -html=coverage.out -o coverage.html
+          coverage=$(awk '$1 == "total:" {gsub(/%/, "", $3); print $3}' coverage.txt)
+          echo "Server statement coverage: ${coverage}% (minimum: 80%)" >> "$GITHUB_STEP_SUMMARY"
+          if ! awk -v coverage="$coverage" 'BEGIN {exit !(coverage != "" && coverage + 0 >= 80)}'; then
+            echo "::error::Server statement coverage ${coverage}% is below the required 80%."
+            exit 1
+          fi
+
+      - name: Race check
+        if: ${{ !cancelled() }}
+        run: go test -race -short -count=1 -timeout=5m ./...
+
+      - name: Upload coverage reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-coverage
+          path: |
+            server/coverage.out
+            server/coverage.txt
+            server/coverage.html
+          if-no-files-found: ignore
+          retention-days: 14

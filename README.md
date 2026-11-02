@@ -1,5 +1,11 @@
 # Lingxi AIRadio: AI Intercom That Understands, Recalls, and Helps Respond
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![ESP-IDF ≥ 6.0.1](https://img.shields.io/badge/ESP--IDF-%E2%89%A5_6.0.1-blue)](https://github.com/espressif/esp-idf)
+![Languages: C/C++ · Go](https://img.shields.io/badge/languages-C%2FC%2B%2B_%C2%B7_Go-blue)
+[![Server CI](https://github.com/liuzhe910422/AIRadio/actions/workflows/server-ci.yml/badge.svg)](https://github.com/liuzhe910422/AIRadio/actions/workflows/server-ci.yml)
+[![Server coverage: 90.4%](https://img.shields.io/badge/server_coverage-90.4%25-brightgreen)](https://github.com/liuzhe910422/AIRadio/actions/workflows/server-ci.yml)
+
 ([English](README.md) | [中文](README_zh.md) | [日本語](README_ja.md))
 
 <p align="center"><img src="homeweb/assets/airadio-architecture.svg" alt="Lingxi AIRadio system architecture" width="900"></p>
