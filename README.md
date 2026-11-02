@@ -1,4 +1,4 @@
-# Lingxi AIRadio: AI Intercom That Understands, Recalls, and Helps Respond
+# Lingxi AIRadio: AI Field Collaboration for Communication, Sensing, and Tasks
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![ESP-IDF ≥ 6.0.1](https://img.shields.io/badge/ESP--IDF-%E2%89%A5_6.0.1-blue)](https://github.com/espressif/esp-idf)
@@ -10,11 +10,11 @@
 
 <p align="center"><img src="homeweb/assets/airadio-architecture-en.svg" alt="Lingxi AIRadio system architecture" width="900"></p>
 
-Lingxi AIRadio is an industry intercom solution built on the Lingxi/XiaoZhi voice channel and ESP32 firmware. It is designed for fleets, logistics parks, warehouses, and temporary field teams. AIRadio combines real-time half-duplex voice, voice-controlled rooms, online AI hosting, and short-term conversation recall in one workflow.
+Lingxi AIRadio is an AI field collaboration solution built on the Lingxi/XiaoZhi voice channel and ESP32 firmware for fleets, logistics parks, warehouses, and temporary teams. It combines real-time half-duplex intercom, voice-controlled rooms, online AI hosting, and recent conversation recall with English translation, images and vision, DHT11 sensing, alerts, task dispatch, and Agent orchestration.
 
-**An AI collaboration interface for frontline teams:** tap to reach a colleague, speak to manage a room, and ask AI to recall recent communication or help respond while people are busy. Everyday radio traffic becomes information that can be reviewed, summarized, and understood by AI.
+**An AI collaboration terminal for frontline teams:** use a button for instant speech, voice for room and task operations, and photos and sensors for field context. Configured workflows connect anomaly detection, AI assessment, human action, and recovery confirmation.
 
-> **Built on real hardware:** this project is more than a browser or virtual-device demo. The current feature set has been flashed onto and field-tested with a Waveshare ESP32-S3 Touch LCD 3.5B. After flashing the firmware and configuring the intercom service URL, the physical device provides the touch talk button, real-time intercom, voice room operations, ASR records, and AI hosting. The browser simulator is only an auxiliary tool for service and protocol validation.
+> **Built on real hardware:** this project is more than a browser or virtual-device demo. The base intercom, rooms, ASR, and hosting features have been flashed onto and tested with a Waveshare ESP32-S3 Touch LCD 3.5B. After flashing the firmware and configuring the intercom service URL, the physical device provides the touch talk button, real-time intercom, voice room operations, ASR records, and AI hosting. The browser simulator is only an auxiliary tool for service and protocol validation.
 
 > **One tap to talk. One sentence to operate. An AI teammate when work gets busy.**
 
@@ -39,10 +39,26 @@ AIRadio gives each action the right interface: **a large button for instant spee
 - **Conversation recall**: ASR produces short-term transcripts with speaker and duration, and messages can be replayed. Users can ask the assistant to summarize the currently retained conversation.
 - **Clear field-ready status**: manual mode uses a blue button and hosting mode uses yellow, while room, speaker, and system events remain visible.
 - **Console and simulator**: the Go service includes device and room management, a browser Opus simulator, and ASR, TTS, and hosting-LLM configuration and test APIs.
+- **English translation**: switch the intercom UI between Chinese and English. English recipients receive asynchronous translated text and synthesized audio after ASR; original speech is retained and translated audio queues after original playback.
+- **Images and vision**: take a photo by voice and share it with the current room; recipients can open thumbnails and full images. Visual alerts and Agent steps use configured prompts for model-assisted assessment.
+- **Temperature and humidity**: the Waveshare ESP32-S3 Touch LCD 3.5B reads a DHT11 and displays its readings; server alerts can request a board sensor snapshot. Cameras and sensors require suitable hardware.
+- **System alerts**: configure temperature/humidity thresholds or visual rules, a capture device, room, and interval. Matches trigger room text and optional TTS, or an Agent workflow.
+- **Cross-device tasks**: create scheduled tasks for another device by voice, with queries, reminders, completion, cancellation, and overdue states. People perform and confirm physical work.
+- **Alert orchestration Agent**: configured Skill steps connect photo requests, visual checks, human tasks, temperature rechecks, and recovery broadcasts. The console manages Skills and displays runs.
+
+## A field anomaly workflow
+
+The high-temperature Demo follows this path:
+
+**Temperature exceeds threshold → photo task for 001 → person takes a photo by voice → AI checks a red indicator → task dispatched to 002 → person confirms completion → temperature rechecked → recovery broadcast to the room.**
+
+Online hosting assists with conversation replies; the orchestration Agent advances predefined processing steps. An Agent photo task is a request to a person, not an automatic assistant camera-tool call. People take the photo and replace the sensor. Recovery depends on sensor rechecks; a normal visual assessment does not establish temperature recovery.
 
 Product page: [Open the AIRadio home page](http://154.94.238.56/).
 
 ## Project video
+
+> **Previous-version demo:** this video has not yet been updated. It mainly shows the earlier intercom, room management, conversation recall, and AI hosting features. It does not cover the subsequently added translation, vision, temperature/humidity sensing, alerts, task dispatch, or orchestration Agent. See this README and the linked design documents for current capabilities.
 
 - Direct download: [http://154.94.238.56/video/ready.mp4](http://154.94.238.56/video/ready.mp4)
 - The video file is relatively large. Download it before watching for a smoother experience.
@@ -66,11 +82,26 @@ The system has four layers:
 
 The audio path is `microphone → 16 kHz mono Opus → WebSocket → same-room device → jitter buffer → decoded playback`. After a session ends, the server submits it to ASR. Eligible hosted devices then run an LLM decision and TTS response.
 
+The added field workflow uses `server/events.go` for scheduled tasks, `server/alerts.go` for capture, rules, and recovery state, and `server/agent.go` for sequential Skill execution. Images upload over HTTP and are announced over WebSocket; sensor capture and alert controls use the Intercom WebSocket. Translation and visual assessment reuse the configured hosting model service; vision requires image input support. These operations stay outside real-time audio forwarding. The image above describes the base communication architecture; the additional workflow is shown below.
+
+```mermaid
+flowchart LR
+    A["Sensor threshold / visual rule"] --> B["Direct room notice"]
+    A --> C["Configured Agent Skill"]
+    C["Configured Agent Skill"] --> D["Photo request / human capture"]
+    D["Photo request / human capture"] --> E["Vision check"]
+    E["Vision check"] --> F["Human task and completion"]
+    F["Human task and completion"] --> G["Temperature recheck"]
+    G["Temperature recheck"] --> H["Room recovery notice"]
+```
+
 ## Current scope
 
 The main target is Waveshare ESP32-S3 Touch LCD 3.5B. Devices retain up to 20 recent records, while temporary audio and text are kept in server memory. Device account binding, multi-organization roles, offline replay, permanent history, and cross-instance routing are not implemented yet. Device and replay endpoints are intended for trusted integration environments. Hosting requires ASR, TTS, and the Hosting LLM to be enabled and the device to remain online.
 
 Rooms currently share a global speaking lock and cannot transmit concurrently. The record limit includes system messages; summaries cover only retained, recognized text. Hosting has no external business tools, long-term memory, or offline answering, and cannot confirm that a business action has been executed. Commercial delivery still requires network, acoustic, hardware, security, and operational validation.
+
+Additional limits: translation currently targets English recipients rather than arbitrary-language simultaneous interpretation. Room images and Agent runs are held in memory and do not survive restarts; events, Skills, and alert configuration/active state can persist with SQLite enabled. The Agent is a fixed-step orchestration Demo without autonomous model planning, full timeout escalation, or restart recovery, and temperature rechecks are bounded. Direct alerts may repeat on successive capture cycles. Demonstrations and partial automated checks do not establish industrial safety or production reliability; sustained operation, weak networks, noise, and concurrent hardware use still require targeted physical-device validation.
 
 ## Quick start
 
@@ -82,6 +113,8 @@ go run . -listen 127.0.0.1:9200 -db ./data/intercom.db
 ```
 
 The console is served by the same process. Configure ASR, TTS, and Hosting LLM after login; third-party API keys remain server-side.
+
+Enable features as needed: translation requires ASR, the hosting model, and TTS; visual assessment requires an image-capable model. Photos need a supported camera; wire the DHT11 according to the board documentation. Use the Events, System Alerts, and Agent console tabs for configuration and inspection. Follow the [Agent Demo guide](design/agent-demo.md), with one enabled matching Skill per alert type for the demo.
 
 ### Build firmware
 
@@ -106,6 +139,12 @@ The recommended real device is the Waveshare ESP32-S3 Touch LCD 3.5B with a 480�
 - [MCP implementation](design/intercom-mcp-implementation.md)
 - [480×320 UI](design/intercom-ui-480x320.md)
 - [Evaluation guide and design trade-offs](design/evaluation-guide.md)
+- [English UI and intercom translation](design/intercom-language-translation.md)
+- [Image messages and preview](design/intercom-image-messaging.md)
+- [DHT11 temperature and humidity](design/dht11-temperature-humidity.md)
+- [Scheduled events and task dispatch](design/events.md)
+- [System alerts (see Agent guide for later recovery behavior)](design/system-alerts.md)
+- [Alert Agent orchestration and recovery](design/agent-demo.md)
 
 ## License
 
